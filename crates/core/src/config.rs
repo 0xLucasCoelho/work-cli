@@ -40,9 +40,15 @@ pub struct WorkspaceConfig {
 }
 
 pub fn config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from(".config"))
-        .join("work")
+    // Spec: ~/.config/work (XDG-style, identical on macOS and Linux).
+    // Respect XDG_CONFIG_HOME when set; otherwise $HOME/.config.
+    match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(x) if !x.is_empty() => PathBuf::from(x),
+        _ => dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config"),
+    }
+    .join("work")
 }
 
 pub fn workspaces_dir() -> PathBuf {

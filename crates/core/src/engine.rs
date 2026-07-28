@@ -165,6 +165,8 @@ impl DockerCli {
         let status = self
             .cmd()
             .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .with_context(|| format!("spawning '{} {}'", self.binary, args.join(" ")))?;
         if !status.success() {
@@ -234,18 +236,26 @@ impl Engine for DockerCli {
             ContainerState::Running | ContainerState::Stopped
         ))
     }
+
     fn container_state(&self, name: &str) -> Result<ContainerState> {
-        // Returns the state string ("running"/"exited"/...) or empty if absent.
-        let state = self.run_capture(&[
-            "inspect",
-            "--type",
-            "container",
-            "--format",
-            "{{.State.Status}}",
-            name,
-        ])?;
+        // `docker inspect` exits non-zero when the container is absent; that is
+        // Missing, not an error. Only treat a *present* container's status.
+        let out = self
+            .cmd()
+            .args([
+                "inspect",
+                "--type",
+                "container",
+                "--format",
+                "{{.State.Status}}",
+                name,
+            ])
+            .output()?;
+        if !out.status.success() {
+            return Ok(ContainerState::Missing);
+        }
+        let state = String::from_utf8_lossy(&out.stdout).trim().to_string();
         match state.as_str() {
-            "" => Ok(ContainerState::Missing),
             "running" => Ok(ContainerState::Running),
             _ => Ok(ContainerState::Stopped),
         }
@@ -271,14 +281,15 @@ impl Engine for DockerCli {
         for arg in &opts.cmd {
             c.arg(arg);
         }
-        let status = c
-            .status()
-            .with_context(|| format!("running container {}", opts.name))?;
-        if !status.success() {
+        // Capture output so the container ID doesn't leak, and so we can report
+        // docker's stderr if creation fails.
+        let out = c.output().with_context(|| format!("running container {}", opts.name))?;
+        if !out.status.success() {
             bail!(
-                "failed to create container {} (exit {:?})",
+                "failed to create container {} (exit {:?}): {}",
                 opts.name,
-                status.code()
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim()
             );
         }
         Ok(())
