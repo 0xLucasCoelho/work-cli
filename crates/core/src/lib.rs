@@ -4,3 +4,4 @@
 //! client over it.
 
 pub mod error;
+pub mod naming;
