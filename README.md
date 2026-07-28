@@ -7,7 +7,7 @@ single machine, with a structural guarantee against cross-context data breach.
 `work` gives each context its own container, named volume (mounted at
 `/home/dev`), and dedicated bridge network. Code, AI agents, and credentials in
 one workspace **physically cannot reach another**. You drive them all from one
-terminal: attach a shell, or open them together in tmux.
+terminal: attach to a persistent session, or tile all live sessions in a cockpit.
 
 > `work` is a **session + isolation manager**. It does **not** install tools and
 > does **not** manage credentials. You install and authenticate your own tools
@@ -21,7 +21,8 @@ terminal: attach a shell, or open them together in tmux.
 
 - A container engine: **OrbStack** (recommended on macOS), **Docker**, **Podman**,
   or **Colima**. `work` auto-detects in that order.
-- `tmux` (only needed for `work all`).
+- `tmux` on the host (only needed for `work resume`/`work all`). The in-container
+  `tmux` (and `zsh`/`bash`) ships inside the base image.
 - macOS today; Linux shares the same codebase.
 
 ## Install
@@ -47,24 +48,67 @@ work doctor     # engine sanity + isolation check (no workspaces yet)
 # 1. Create an isolated workspace (volume + network + container).
 work new acme --git-name "Jane Doe" --git-email jane@acme.io
 
-# 2. Shell into it.
+# 2. Attach to its persistent session.
 work acme
-#   -> you are now `dev` in /home/dev, inside an isolated Linux container.
+#   -> you are `dev` in /home/dev, inside an isolated Linux container, in a
+#      tmux session named `work`. Start an agent, then detach with Ctrl-b d
+#      (or just close the terminal) — it keeps running.
 
 # 3. Inside the container, install & log into YOUR OWN tools.
 #    (work never does this for you, and never sees your credentials)
 npm i -g @anthropic-ai/claude-code && claude   # example
 
-# 4. List / control your workspaces from the host.
-work ls                 # acme  running
-work stop acme          # stop (state persists in the volume)
+# 4. List / control / remove your workspaces from the host.
+work ls                 # WORKSPACE  STATE    SESSION
+                        # acme       running  live
+work resume             # cockpit: tile every running session (host prefix Ctrl-a)
+work stop acme          # stop the container (ends its session; files persist)
 work start acme         # start again
-work all                # open every workspace in a tmux session
+work rm acme            # remove container+net+config, KEEP the volume
+work rm acme --purge    # also delete the volume (irreversible; needs --yes)
 work doctor             # verify isolation holds
 ```
 
 Each workspace is fully persistent: whatever you install, your repos, your
 dotfiles, and your logins live in that workspace's volume and survive reboots.
+
+## Persistent sessions
+
+`work <ws>` attaches to (or creates) a **tmux session named `work` inside the
+container**. Anything you start there — shells, editors, AI agents — survives
+detaching, closing the terminal/tab, and host sleep. It does **not** survive
+`work stop` (an explicit power-off: running processes end, but files and on-disk
+state in the volume persist) or `work rm`.
+
+- **Detach:** `Ctrl-b d`, or just close the terminal.
+- **Reattach:** `work <ws>` again.
+- **Close the session:** `exit` at its prompt.
+
+## The cockpit (`work resume`)
+
+`work resume` (alias: `work all`) opens one **host** tmux session with a window
+per **running** workspace, each attached to that container's session. The host
+prefix is **`Ctrl-a`** so it doesn't clash with the in-container `Ctrl-b`:
+`Ctrl-a <window>` switches workspaces, `Ctrl-a d` detaches the cockpit. Stopped
+workspaces are listed in a note. No path is created between containers — each
+window is an isolated client into one container on its own network.
+
+## Familiarity (optional)
+
+`work` detects your host shell (`$SHELL`, clamped to `zsh`/`bash`) and uses it
+inside the container. You can optionally seed a verbatim copy of your own config:
+
+```bash
+work new acme --import-shell-config            # copies ~/.zshrc (or ~/.bashrc)
+work new acme --import-shell-config ~/my.zshrc # copies that file -> /home/dev/.zshrc
+work new acme --import-tmux-config             # copies ~/.tmux.conf -> /home/dev/.tmux.conf
+```
+
+`work` prints a warning when it copies a config — **make sure it is secret-free**,
+since it now lives in that workspace's volume. You can set a global default in
+`~/.config/work/config.toml` (`import_shell_config = "…"`). A copied rc may
+reference host paths that don't exist in the container; the copy is verbatim and
+best-effort.
 
 ## Why isolation matters
 
@@ -100,24 +144,33 @@ work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 
 | Command | Effect |
 |---|---|
-| `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`. |
-| `work <ws>` | Ensure running; exec an interactive shell. |
-| `work ls` | List workspaces and container state. |
-| `work start <ws>` / `work stop <ws>` | Lifecycle (state persists). |
+| `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-tmux-config [<path>]`. |
+| `work <ws>` | Attach to (or create) the persistent in-container session. `Ctrl-b d` detaches. |
+| `work ls` | List workspaces with state and session liveness (`live`/`—`). |
+| `work start <ws>` / `work stop <ws>` | Lifecycle. `stop` ends the session (warns if one is live). |
 | `work stop-all` | Stop every workspace. |
-| `work all` | Open all workspaces in a tmux session named `work`. |
+| `work resume` / `work all` | Cockpit: tile every running session in a host tmux (`Ctrl-a`). |
+| `work rm <ws>` | Remove container + network + config, **keep** the volume. |
+| `work rm <ws> --purge` | Also delete the volume (irreversible). Needs `--yes`. |
 | `work fwd <ws> <port>` | (opt-in) forward a host port into a workspace for your own logins. |
 | `work config <ws>` | Show config. `--edit` opens it in `$EDITOR`. |
 | `work image build` | Build the default `work-base:latest`; `--tag`/`--dockerfile` for custom images. |
 | `work doctor` | Isolation + engine sanity check. |
+| `work --yes` / `-y` | Global flag: skip all destructive-operation confirmations. |
+
+**Destructive-operation safety.** `work` always warns + confirms destructive
+ops, prompting only on a TTY. Two severities: **data loss** (`rm --purge`)
+requires `--yes` or an interactive confirm and is **refused** in non-interactive
+contexts; **work loss** (`stop`/`stop-all`/`rm`/`config --edit` recreate) warns
+only when a live session would be ended. `--yes`/`-y` skips all prompts.
 
 ## Configuration
 
 Non-secret metadata lives under `~/.config/work/`:
 
 ```
-~/.config/work/config.toml              # default_image, etc.
-~/.config/work/workspaces/<ws>.toml     # per-workspace: image, git identity, …
+~/.config/work/config.toml              # default_image, import_shell_config, import_tmux_config
+~/.config/work/workspaces/<ws>.toml     # per-workspace: image, git identity, shell, …
 ```
 
 `work` stores **only non-secret metadata** there. Credentials live inside each
