@@ -7,3 +7,6 @@ pub mod error;
 pub mod naming;
 pub mod config;
 pub mod engine;
+pub mod image;
+pub mod doctor;
+pub mod workspace;
