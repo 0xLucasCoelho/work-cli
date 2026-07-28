@@ -65,6 +65,33 @@ impl Workspace {
         // Ensure the image exists: build the default, or pull a custom one.
         ensure_image(&*engine, &image)?;
 
+        // Familiarity: resolve + validate import sources BEFORE creating any
+        // resources, so a bad path fails fast with no orphaned volume/net/container.
+        let shell = config::detect_shell();
+        let rc = config::rc_name(&shell);
+        let seeds: Vec<(std::path::PathBuf, String, &str)> = [
+            resolve_import(import_shell, global.import_shell_config.as_deref())
+                .map(|s| (s.to_path(rc), format!("/home/dev/{rc}"), "shell")),
+            resolve_import(import_tmux, global.import_tmux_config.as_deref()).map(|s| {
+                (
+                    s.to_path(".tmux.conf"),
+                    "/home/dev/.tmux.conf".into(),
+                    "tmux",
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        for (src, _dest, kind) in &seeds {
+            if !src.exists() {
+                bail!(
+                    "{kind} config not found at {}; pass an explicit path (e.g. --import-{kind}-config <path>)",
+                    src.display()
+                );
+            }
+        }
+
         let vol = naming::volume(name);
         let net = naming::network(name);
         let ctr = naming::container(name);
@@ -89,34 +116,12 @@ impl Workspace {
         };
         engine.run(&opts)?;
 
-        // Familiarity: detect shell, seed requested configs (verbatim, warned),
-        // and suppress the shell's first-run prompt (the named volume overlays
-        // the image's baked-in /home/dev, hiding any image-side rc).
-        let shell = config::detect_shell();
-        if let Some(src) = resolve_import(import_shell, global.import_shell_config.as_deref()) {
-            let rc = config::rc_name(&shell);
-            let host_path = src.to_path(rc);
-            seed_into(
-                &*engine,
-                &ctr,
-                &host_path,
-                &format!("/home/dev/{rc}"),
-                "shell",
-                name,
-            )?;
+        // Seed validated configs (verbatim, warned) + suppress the shell's
+        // first-run prompt (the named volume overlays the image's /home/dev).
+        for (src, dest, kind) in &seeds {
+            seed_into(&*engine, &ctr, src, dest, kind, name)?;
         }
-        if let Some(src) = resolve_import(import_tmux, global.import_tmux_config.as_deref()) {
-            let host_path = src.to_path(".tmux.conf");
-            seed_into(
-                &*engine,
-                &ctr,
-                &host_path,
-                "/home/dev/.tmux.conf",
-                "tmux",
-                name,
-            )?;
-        }
-        ensure_rc_present(&*engine, &ctr, config::rc_name(&shell))?;
+        ensure_rc_present(&*engine, &ctr, rc)?;
 
         let cfg = WorkspaceConfig {
             name: name.to_string(),
