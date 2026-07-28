@@ -14,6 +14,9 @@ use commands::NewArgs;
     about = "Isolated multi-context session manager"
 )]
 struct Cli {
+    /// Skip all destructive-operation confirmations (script-friendly).
+    #[arg(short = 'y', long = "yes", global = true)]
+    yes: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -22,16 +25,18 @@ struct Cli {
 enum Command {
     /// Create an isolated workspace: volume + network + container.
     New(NewArgs),
-    /// List workspaces and container state.
+    /// List workspaces, container state, and session liveness.
     Ls,
     /// Start a workspace container.
     Start { name: String },
-    /// Stop a workspace container.
+    /// Stop a workspace container (ends its in-container session).
     Stop { name: String },
     /// Stop every workspace.
     #[command(name = "stop-all")]
     StopAll,
-    /// Open all workspaces in a tmux session named `work`.
+    /// Cockpit: tile all running workspaces' sessions in a host tmux.
+    Resume,
+    /// (alias of `resume`)
     All,
     /// (opt-in) forward a host port into a workspace for your own logins.
     Fwd { ws: String, port: u16 },
@@ -46,6 +51,13 @@ enum Command {
     Image {
         #[command(subcommand)]
         action: ImageCmd,
+    },
+    /// Remove a workspace: container + network + config (keeps the volume
+    /// unless --purge, which deletes it irreversibly).
+    Rm {
+        ws: String,
+        #[arg(long)]
+        purge: bool,
     },
     /// Isolation + engine sanity check.
     Doctor,
@@ -63,7 +75,7 @@ enum ImageCmd {
 }
 
 // Reserved tokens — if the first arg matches none and isn't a flag, treat it as
-// `work <ws>` (interactive shell).
+// `work <ws>` (attach to its persistent session).
 const RESERVED: &[&str] = &[
     "new",
     "all",
@@ -71,6 +83,8 @@ const RESERVED: &[&str] = &[
     "start",
     "stop",
     "stop-all",
+    "resume",
+    "rm",
     "fwd",
     "config",
     "image",
@@ -97,16 +111,23 @@ fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
         None => commands::ls()?,
-        Some(Command::New(a)) => commands::new(&a.name, a.image, a.git_name, a.git_email)?,
+        Some(Command::New(a)) => commands::new(
+            &a.name,
+            a.image,
+            a.git_name,
+            a.git_email,
+            a.import_shell_config,
+            a.import_tmux_config,
+        )?,
         Some(Command::Ls) => commands::ls()?,
         Some(Command::Start { name }) => commands::start(&name)?,
-        Some(Command::Stop { name }) => commands::stop(&name)?,
-        Some(Command::StopAll) => commands::stop_all()?,
-        Some(Command::All) => commands::all()?,
+        Some(Command::Stop { name }) => commands::stop(&name, cli.yes)?,
+        Some(Command::StopAll) => commands::stop_all(cli.yes)?,
+        Some(Command::Resume) | Some(Command::All) => commands::resume()?,
         Some(Command::Fwd { ws, port }) => commands::fwd(&ws, port)?,
         Some(Command::Config { ws, edit }) => {
             if edit {
-                commands::config_edit(&ws)?;
+                commands::config_edit(&ws, cli.yes)?;
             } else {
                 commands::config_show(&ws)?;
             }
@@ -116,6 +137,7 @@ fn main() -> Result<ExitCode> {
                 commands::image_build(tag.as_deref(), dockerfile.as_deref())?;
             }
         },
+        Some(Command::Rm { ws, purge }) => commands::rm(&ws, purge, cli.yes)?,
         Some(Command::Doctor) => {
             return commands::doctor();
         }
