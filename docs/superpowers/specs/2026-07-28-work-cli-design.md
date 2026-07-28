@@ -1,88 +1,82 @@
-# `work` — Multi-Company Isolated Development Platform
+# `work` — Isolated Multi-Context Development CLI
 
 - **Date:** 2026-07-28
 - **Status:** Design approved — pending implementation plan
 - **Owner:** Lucas Coelho
-- **Stack:** Rust + Tauri · targets macOS and Linux
+- **Project:** `work-cli` · open source (MIT) · Rust
+- **Scope:** v1 is a CLI; GUI/tray are on the roadmap (see Roadmap)
+- **Targets:** macOS now, Linux later (shared codebase)
 
-## Problem
+## Problem (generic)
 
-Work across three companies (**Logosoft**, **Shopvision**, **Coda**) on a single Mac,
-concurrently. Each company has its own AI tool subscriptions, git account, and
-repositories, with a **hard confidentiality boundary**: no company's code,
-credentials, or AI-agent state may reach another company.
+Many developers juggle **multiple unrelated contexts** on one machine — an agency
+with several clients, a contractor across employers, work-vs-personal, multiple
+cloud/tenant accounts — and increasingly drive **AI coding agents** (Claude Code,
+Codex, z.ai, Gemini CLI, …) that can read the filesystem and persist memory across
+sessions. There is a hard requirement: **no context's code, credentials, or
+agent-state may reach another.** Switching macOS accounts is inconvenient; swapping
+env vars is insufficient because an agent running as the user can read sibling
+directories.
 
-**Hard constraints**
+`work` gives each context an **isolated, persistent container** with its own tools,
+git identity, credentials, and repos — all drivable from one terminal, concurrently,
+without account switching.
 
-- No macOS user-account switching — driven from one login session.
-- Companies run **concurrently**, on-screen at the same time.
-- Workflow is "managing AI agents to code," almost entirely terminal-based.
-- **Tool-pluggable**: support as many terminal coding agents as possible, not a
-  hardcoded set.
-- **Two first-class UIs**: a menu-bar/system tray *and* a full management GUI, in
-  addition to the CLI.
-- **Cross-platform**: macOS now, Linux later (shared codebase).
-
-**Current tool subscriptions per company**
-
-| Company   | Claude Code | Codex | z.ai (GLM) |
-|-----------|:-----------:|:-----:|:----------:|
-| Logosoft  | ✓           | ✓     |            |
-| Shopvision| ✓           | ✓     |            |
-| Coda      | ✓           |       | ✓          |
-
-(Cursor was considered and dropped — CLI-only, per decision. The registry supports
-adding further terminal agents: Gemini CLI, Qwen Code, Aider, OpenCode, Goose,
-Crush, Amazon Q CLI, Copilot CLI, Cody, Amp, etc.)
+**Documented example (not the definition).** Lucas works across three companies —
+`lagoasoft`, `shopvision`, `coda` — each with its own Claude Code / Codex / z.ai
+subscriptions. These are just three `work` workspaces; the tool is generic.
 
 ## Goal / Non-goals
 
-**Goal.** A platform, `work`, built on a shared Rust core that creates and drives one
-**isolated, persistent Linux container per company** (via OrbStack), enforces
-isolation at the container/network/volume boundary, and is drivable from a CLI, a
-menu-bar tray, and a GUI — all as control-plane clients of the core. Secrets never
-leave a company's container.
+**Goal.** An open-source CLI, `work`, built on a shared Rust core that creates and
+drives one **isolated, persistent Linux container per workspace** via a
+container-engine abstraction, enforces isolation at the container/network/volume
+boundary, and is fully user-configured (no hardcoded contexts). Secrets never leave a
+workspace's container.
 
-**Non-goals.**
+**Non-goals (v1).**
 
-- GUI coding tools (Cursor dropped).
+- GUI / menu-bar tray (roadmap).
 - Defending against a malicious host-level attacker or kernel/container escape.
 - Managing billing or the subscriptions themselves.
-- Replacing git — `work` just scopes git per company.
-- A long-running daemon in v0 (deferred; see Sequencing).
+- Replacing git — `work` just scopes git per workspace.
+- A long-running daemon (deferred; see Roadmap).
+
+## Hard constraints
+
+- Driven from one login session; **no OS account switching**.
+- Workspaces run **concurrently**, on-screen at the same time.
+- **Tool-pluggable**: support many terminal coding agents via a registry.
+- **Container-engine-agnostic**: works with OrbStack (recommended on macOS), Docker,
+  Podman, Colima — whatever the user has.
+- **Config-first**: contexts are user data, never hardcoded.
 
 ## Threat model
 
 The adversary is a **non-malicious AI coding agent** that may read the filesystem
-and persist memory/context across sessions. Cross-company reads/exfiltration are
+and persist memory/context across sessions. Cross-context reads/exfiltration are
 prevented by OS-level container boundaries. Containers share the host kernel
 (acceptable for this model); escalate to full VMs only if a hostile-workload
-requirement emerges. Directory/env-var switching alone is explicitly rejected — it
-does not stop an agent running as the user from reading sibling directories.
+requirement emerges. Directory/env-var switching is explicitly rejected — it does
+not stop an agent running as the user from reading sibling directories.
 
-## Layered architecture
+## Layered architecture (v1 = core + CLI)
 
-Isolation logic lives in **exactly one place** — the core library. Every UI is a
-thin control-plane client. No company files are ever read or stored on the host by
-any UI layer.
+Isolation logic lives in **exactly one place** — the core library. The CLI is a thin
+client. A GUI/tray (later) will be an additional client of the same core.
 
 ```mermaid
 flowchart TB
-  subgraph UI["UI layer (host · control-plane only · no company files ever)"]
-    CLI["work CLI (binary)"]
-    TRAY["Menu bar / tray"]
-    GUI["GUI window"]
-  end
-  CORE["work-core (Rust library)<br/>orchestration · isolation · registry · config"]
+  CLI["work CLI (binary)"]
+  CORE["work-core (Rust library)<br/>orchestration · isolation · registry · config · engine adapter"]
   subgraph RUN["Runtime (fully isolated)"]
-    L[logosoft container]
-    S[shopvision container]
-    C[coda container]
+    W1[workspace A container]
+    W2[workspace B container]
+    W3[workspace C container]
   end
   CLI --> CORE
-  TRAY --> CORE
-  GUI --> CORE
-  CORE --> L & S & C
+  CORE --> W1 & W2 & W3
+  GUI["GUI / tray (ROADMAP)"] -.-> CORE
 ```
 
 **Workspace layout**
@@ -91,37 +85,32 @@ flowchart TB
 work-cli/
   Cargo.toml                 # workspace
   crates/
-    core/                    # work-core lib: orchestration, isolation, registry, config
+    core/                    # work-core lib: orchestration, isolation, registry, config, engine adapter
     cli/                     # `work` binary — thin client over core
-  app/
-    src-tauri/               # Tauri backend (Rust) — links work-core; tray + window
-    src/                     # Svelte + TypeScript frontend
+  LICENSE                    # MIT
+  README.md  CONTRIBUTING.md
 ```
-
-A daemon (`workd`) over a Unix socket is **deferred** — added only in a later phase
-if CLI and GUI contention over docker state demands a single owner. For v0, CLI and
-Tauri app each link `work-core` directly; the tray polls `docker` for live status.
 
 ## Runtime isolation (the confidentiality wall)
 
-- **Runtime:** OrbStack (lightweight Linux VM + Docker engine) on Apple Silicon.
-- **One persistent container per company**, from a shared base image
-  `work-base:latest`.
-- **Per-company named Docker volume** mounted at `/home/dev` — entire home persists
+- **Container engine:** abstracted — auto-detect OrbStack → Docker → Podman → Colima
+  (or take from config). Not locked to OrbStack.
+- **One persistent container per workspace**, from a shared base image `work-base:latest`.
+- **Per-workspace named Docker volume** mounted at `/home/dev` — entire home persists
   (tools, credentials, repos, dotfiles). Repos under `~/repos`.
-- **Per-company dedicated bridge network** (`work-net-<co>`), each NAT'd to the
-  internet independently. Company containers **cannot address each other** (no
-  shared L2), so there is no network path between companies.
-- **Secrets live only inside the company's volume** — OAuth tokens, SSH private
+- **Per-workspace dedicated bridge network** (`work-net-<ws>`), each NAT'd to the
+  internet independently. Workspace containers **cannot address each other** (no
+  shared L2), so there is no network path between workspaces.
+- **Secrets live only inside the workspace's volume** — OAuth tokens, SSH private
   keys, API keys are never written to the host filesystem in plaintext.
-- **Host-side config** (`~/.config/work/companies/<co>.toml`) holds only non-secret
+- **Host-side config** (`~/.config/work/workspaces/<ws>.toml`) holds only non-secret
   metadata: display name, git identity, enabled tools, volume/network names, image tag.
 
 ## Base image (`work-base:latest`)
 
 `FROM node:20-bookworm-slim` (Claude Code, Codex CLI, z.ai coding-helper, and most
 terminal agents are Node-based). Adds: `git`, `openssh-client`, `ca-certificates`,
-`tmux`, `zsh`, `curl`, `jq`, plus any per-tool system deps declared in the registry.
+`tmux`, `zsh`, `curl`, `jq`, plus per-tool system deps declared in the registry.
 Creates a non-root user `dev` (Claude Code refuses root). Tool installs happen
 in-container at bootstrap and persist via the home volume.
 
@@ -149,22 +138,23 @@ login = "apikey"
 env = { ZAI_API_KEY = "" }
 ```
 
-A company enables a subset; `work new`/`work login` iterate over the enabled set.
-Most agents share the npm + config-dir + oauth-or-apikey shape, so the registry
-stays small and extensible.
+A workspace enables a subset; `work new`/`work login` iterate over the enabled set.
+Candidate tools: Claude Code, Codex CLI, z.ai, Gemini CLI, Qwen Code, Aider,
+OpenCode, Goose, Crush, Amazon Q CLI, Copilot CLI, Cody, Amp. Most share the
+npm + config-dir + oauth-or-apikey shape.
 
-## Per-company bootstrap — `work new <co>`
+## Per-workspace bootstrap — `work new <ws>`
 
-1. Create volume `work-<co>-home` and network `work-net-<co>`.
-2. Start container `work-<co>` from `work-base`, on its own network, volume at
+1. Create volume `work-<ws>-home` and network `work-net-<ws>`.
+2. Start container `work-<ws>` from `work-base`, on its own network, volume at
    `/home/dev`, running as `dev`.
 3. Apply git identity (`user.name` / `user.email`) from config.
 4. Generate an SSH ed25519 keypair in `~/.ssh`; print the public key to add to that
-   company's git account.
-5. Install the company's enabled tools from the registry.
-6. Run the `work login <co>` flows.
+   workspace's git account.
+5. Install the workspace's enabled tools from the registry.
+6. Run the `work login <ws>` flows.
 
-## Auth flow — `work login <co>`
+## Auth flow — `work login <ws>`
 
 - **oauth tools (Claude Code, Codex, …):** OAuth login executed **inside the
   container**; the CLI forwards the OAuth callback port to the host so the host
@@ -177,69 +167,63 @@ stays small and extensible.
 
 | Command | Effect |
 |---|---|
-| `work new <co>` | bootstrap container + volume + network + identity + tools |
-| `work <co>` | ensure running; exec an interactive shell |
-| `work all` | tmux session `work`, one window per company |
-| `work clone <co> <url>` | clone a repo into `~/repos` as that company's identity |
-| `work login <co>` | run tool logins (see Auth flow) |
-| `work ls` | list companies + container/volume status |
-| `work start <co>` / `work stop <co>` / `work stop --all` | lifecycle |
-| `work config <co>` | edit company metadata |
+| `work new <ws>` | bootstrap container + volume + network + identity + tools |
+| `work <ws>` | ensure running; exec an interactive shell |
+| `work all` | tmux session `work`, one window per workspace |
+| `work clone <ws> <url>` | clone a repo into `~/repos` as that workspace's identity |
+| `work login <ws>` | run tool logins (see Auth flow) |
+| `work ls` | list workspaces + container/volume status |
+| `work start <ws>` / `work stop <ws>` / `work stop --all` | lifecycle |
+| `work config <ws>` | edit workspace metadata |
 | `work image build` | rebuild the base image |
-| `work doctor` | isolation sanity check |
+| `work doctor` | isolation + engine sanity check |
 
-## UI (Tauri: tray + window, both first-class)
+## Open-source project
 
-One Tauri app provides two surfaces sharing one Rust backend that links `work-core`:
+- **License:** MIT.
+- **Distribution:** `cargo install`, Homebrew tap, and per-release static binaries
+  (GitHub Releases) for macOS (arm64/x86_64) and Linux.
+- **Docs:** README with quickstart; CONTRIBUTING; the registry as an extensible,
+  community-contributable catalog.
+- **Engine adapter** abstracts OrbStack/Docker/Podman/Colima so contributors on any
+  runtime can use it.
 
-- **Tray menu** — at-a-glance status per company (running/stopped), start/stop, and
-  one-click **"switch into"** (opens a host terminal that `docker exec`s into the
-  container). Lives in the menu bar (macOS) / system tray (Linux).
-- **GUI window** — create/edit companies, enable/disable tools, trigger logins, view
-  per-company status and recent logs, open terminals.
-- **Frontend:** Svelte + TypeScript (small, Tauri-friendly; swappable for React).
-- **Isolation-preserving:** the UI shows only metadata + status and triggers actions
-  via `work-core`. It never reads or displays company file contents — and cannot,
-  since files live in named volumes inaccessible to the host.
+## Roadmap (post-v1)
 
-## Stack & dependencies
+1. **Tauri app** — menu-bar tray (status / start-stop / one-click "switch into") +
+   full management GUI, both as clients of `work-core`. Frontend: Svelte + TS.
+2. **`workd` daemon** — single owner of docker state, exposed over a Unix socket, if
+   CLI+GUI contention requires it.
+3. **Expanded registry** — community-contributed tool definitions.
+4. **Linux hardening** — verify Podman/Colima paths, tray parity, packaging.
 
-- **Rust** (`rustup`) for `work-core`, the CLI, and the Tauri backend.
-- **Tauri v2** for the desktop app + tray (native, small, cross-platform).
-- **Docker via `std::process::Command`** for v0 (simple, debuggable); consider the
-  `bollard` API client later if needed.
-- **OrbStack** as the container runtime on macOS.
-- **macOS build deps:** Xcode Command Line Tools. **Linux deps:** webkit2gtk et al.
+## Sequencing (v1)
 
-## Sequencing
-
-1. **Phase 0 — Environment:** install OrbStack + Rust toolchain + Tauri deps.
-2. **Phase 1 — Core engine:** `work-core` lib + CLI; config model;
-   `new`/`start`/`stop`/`<co>`/`ls`/`clone`/`doctor`; container/volume/network
+1. **Phase 0 — Environment:** install a container engine (OrbStack recommended) +
+   Rust toolchain.
+2. **Phase 1 — Core engine:** `work-core` lib + CLI; config model; engine adapter;
+   `new`/`start`/`stop`/`<ws>`/`ls`/`clone`/`doctor`; container/volume/network
    orchestration; isolation enforcement; **one tool (Claude Code) working end-to-end
-   for one company**.
-3. **Phase 2 — Registry + auth + all companies:** registry data model; add Codex and
-   z.ai; in-container OAuth flow; stand up all three companies.
-4. **Phase 3 — Tauri shell:** tray menu + window scaffold, status polling,
-   start/stop/switch actions (linking `work-core`).
-5. **Phase 4 — Full GUI:** company management, tool enable/install, logins, logs.
-6. **(Later) `workd` daemon** — only if CLI+GUI state contention requires it.
+   for one workspace**.
+3. **Phase 2 — Registry + auth + many workspaces:** registry data model; add Codex
+   and z.ai; in-container OAuth flow; stand up multiple workspaces.
+4. **Phase 3 — OSS hardening:** README/quickstart, CONTRIBUTING, MIT license, tests,
+   `cargo install` + Homebrew formula + release binaries, robust `work doctor`.
 
 ## Isolation guarantees — what `work doctor` enforces
 
-- Each company container is on a **unique network**; no two companies share a network.
+- Each workspace container is on a **unique network**; no two workspaces share a network.
 - Each container's **only** mount is its own home volume; no host bind-mounts.
-- No company's volume is mounted into any other container.
-- `work` never injects one company's env vars or keys into another's container.
+- No workspace's volume is mounted into any other container.
+- `work` never injects one workspace's env vars or keys into another's container.
 
 ## Risks / open questions
 
-1. **OAuth callback forwarding under OrbStack** — verify port-publishing behavior for
+1. **OAuth callback forwarding** — verify per-engine port-publishing behavior for
    in-container OAuth; API-key is the fallback.
-2. **uid mapping** for named-volume file ownership — OrbStack handles this; verify.
-3. **Claude Code Max device limits** — confirm multiple concurrent container logins
+2. **Engine adapter parity** — verify Podman/Colima compatibility beyond OrbStack/Docker.
+3. **uid mapping** for named-volume file ownership — verify across engines.
+4. **Claude Code Max device limits** — confirm multiple concurrent container logins
    are permitted under the subscription.
-4. **Tauri tray parity on Linux** — confirm StatusNotifierItem behavior matches macOS
-   menu bar; verify when Linux target becomes active.
-5. **Company identifiers** — confirm canonical spellings (`logosoft` / `shopvision` /
-   `coda`); "lagoasoft" appeared in conversation.
+5. **Example identifiers** — `lagoasoft` / `shopvision` / `coda` confirmed as example
+   workspaces.
