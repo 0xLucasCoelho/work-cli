@@ -12,3 +12,4 @@ path = "src/main.rs"
 work-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+toml.workspace = true
