@@ -437,11 +437,14 @@ impl Engine for DockerCli {
         let publish = format!("127.0.0.1:{host_port}:{host_port}");
         let listen = format!("TCP-LISTEN:{host_port},fork,reuseaddr");
         let connect = format!("TCP:{target}:{target_port}");
-        let out = self
+        // Foreground + attached: this call BLOCKS until the user interrupts.
+        // Ctrl-C is delivered to the whole process group; `docker run` catches
+        // it, stops the container, and `--rm` removes it — cleanup is robust
+        // even if this process is killed before returning.
+        let status = self
             .cmd()
             .args([
                 "run",
-                "-d",
                 "--rm",
                 "--name",
                 name,
@@ -455,12 +458,13 @@ impl Engine for DockerCli {
                 &listen,
                 &connect,
             ])
-            .output()?;
-        if !out.status.success() {
-            bail!(
-                "failed to start port forwarder: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()?;
+        // Exit 130 = SIGINT (Ctrl-C) — the normal way to stop the bridge.
+        if !status.success() && status.code() != Some(130) {
+            bail!("port forwarder exited with {:?}", status.code());
         }
         Ok(())
     }

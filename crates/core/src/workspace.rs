@@ -225,27 +225,26 @@ pub fn list_all() -> Result<Vec<WorkspaceStatus>> {
 }
 
 /// `work fwd <ws> <port>`: bridge `127.0.0.1:<port>` (host) to `<ws>:<port>`.
-/// Runs a detached forwarder on the workspace's dedicated network and follows
-/// its logs in the foreground; Ctrl-C tears the bridge down.
+/// Runs the forwarder in the foreground on the workspace's dedicated network;
+/// Ctrl-C lets `docker run` stop + `--rm` the container.
 pub fn forward(name: &str, port: u16) -> Result<()> {
     let ws = Workspace::open(name)?;
     ws.ensure_running()?;
     let engine = ws.engine();
     let fwd_name = format!("work-fwd-{name}-{port}");
-    let net = naming::network(name);
-    let target = naming::container(name);
     if engine.container_exists(&fwd_name)? {
         engine.remove_container(&fwd_name)?;
     }
-    engine.run_forwarder(&fwd_name, &net, port, &target, port)?;
     println!("Forwarding http://127.0.0.1:{port} -> {name}:{port}");
     println!("(Ctrl-C to stop the bridge)");
-    // Follow the forwarder's logs until the user interrupts.
-    let _ = Command::new(engine.binary())
-        .args(["logs", "--follow", &fwd_name])
-        .status();
-    // Cleanup on exit (Ctrl-C / logs end).
-    let _ = engine.remove_container(&fwd_name);
+    // Blocks until interrupted; cleanup is handled by `docker run --rm`.
+    engine.run_forwarder(
+        &fwd_name,
+        &naming::network(name),
+        port,
+        &naming::container(name),
+        port,
+    )?;
     println!("bridge stopped");
     Ok(())
 }

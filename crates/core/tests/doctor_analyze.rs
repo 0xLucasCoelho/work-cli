@@ -103,12 +103,11 @@ fn hardening_flags_wrong_restart_policy() {
         "{}",
     );
     assert!(
-        analyze_hardening(&p)
+        !analyze_hardening(&p)
             .iter()
             .find(|r| r.label == "acme:restart")
             .unwrap()
             .ok
-            == false
     );
 }
 
@@ -123,12 +122,11 @@ fn hardening_flags_root_user() {
         "{}",
     );
     assert!(
-        analyze_hardening(&p)
+        !analyze_hardening(&p)
             .iter()
             .find(|r| r.label == "acme:user")
             .unwrap()
             .ok
-            == false
     );
 }
 
@@ -143,12 +141,11 @@ fn hardening_flags_image_mismatch() {
         "{}",
     );
     assert!(
-        analyze_hardening(&p)
+        !analyze_hardening(&p)
             .iter()
             .find(|r| r.label == "acme:image")
             .unwrap()
             .ok
-            == false
     );
 }
 
@@ -164,11 +161,10 @@ fn hardening_flags_published_ports() {
         ports,
     );
     assert!(
-        analyze_hardening(&p)
+        !analyze_hardening(&p)
             .iter()
             .find(|r| r.label == "acme:ports")
             .unwrap()
             .ok
-            == false
     );
 }
