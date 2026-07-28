@@ -72,6 +72,11 @@ enum ImageCmd {
         #[arg(long)]
         dockerfile: Option<PathBuf>,
     },
+    /// Scaffold a personal workspace Dockerfile (extends work-base) to customize.
+    Init {
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 // Reserved tokens — if the first arg matches none and isn't a flag, treat it as
@@ -135,6 +140,9 @@ fn main() -> Result<ExitCode> {
         Some(Command::Image { action }) => match action {
             ImageCmd::Build { tag, dockerfile } => {
                 commands::image_build(tag.as_deref(), dockerfile.as_deref())?;
+            }
+            ImageCmd::Init { output } => {
+                commands::image_init(output.as_deref())?;
             }
         },
         Some(Command::Rm { ws, purge }) => commands::rm(&ws, purge, cli.yes)?,

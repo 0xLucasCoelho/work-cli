@@ -185,6 +185,23 @@ pub fn image_build(tag: Option<&str>, dockerfile: Option<&std::path::Path>) -> R
     Ok(())
 }
 
+/// `work image init`: scaffold a personal workspace Dockerfile to customize.
+pub fn image_init(output: Option<&std::path::Path>) -> Result<()> {
+    let default = std::path::Path::new("Dockerfile.work");
+    let path = output.unwrap_or(default);
+    image::init_template(path)?;
+    println!("✓ wrote {}", path.display());
+    println!();
+    println!("Edit it, then build and use it:");
+    println!(
+        "  work image build --tag my-work:latest --dockerfile {}",
+        path.display()
+    );
+    println!("  work new <ws> --image my-work:latest");
+    println!("  # or set default_image = \"my-work:latest\" in ~/.config/work/config.toml");
+    Ok(())
+}
+
 /// `work config <ws>`: print the (non-secret) workspace metadata.
 pub fn config_show(name: &str) -> Result<()> {
     let cfg = config::load_workspace(name)?;

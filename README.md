@@ -110,6 +110,23 @@ since it now lives in that workspace's volume. You can set a global default in
 reference host paths that don't exist in the container; the copy is verbatim and
 best-effort.
 
+## Custom images (your tools, baked in)
+
+Want every workspace to start with your full toolchain instead of importing it
+each time? Build a personal image that extends the isolation-safe base:
+
+1. Scaffold a starter: `work image init` (writes `./Dockerfile.work`).
+2. Edit it — add your tools (the comments show `apt`, `cargo-binstall`, and the
+   glibc/musl gotcha for binaries that need a newer glibc than the base ships).
+3. Build: `work image build --tag my-work:latest --dockerfile ./Dockerfile.work`.
+4. Use it: `work new <ws> --image my-work:latest`, or set
+   `default_image = "my-work:latest"` in `~/.config/work/config.toml`.
+
+`FROM work-base:latest` preserves every invariant `work doctor` checks (non-root
+`dev` @ `/home/dev`, tmux/zsh/bash). Bake tool **binaries** in (system-wide, e.g.
+`/usr/local/bin`); bring your `~/.zshrc` per-workspace via `--import-shell-config`
+— the volume overlays `/home/dev`, so image-baked rc files get hidden.
+
 ## Why isolation matters
 
 AI coding agents can read the filesystem and persist memory across sessions.
@@ -155,6 +172,7 @@ work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 | `work fwd <ws> <port>` | (opt-in) forward a host port into a workspace for your own logins. |
 | `work config <ws>` | Show config. `--edit` opens it in `$EDITOR`. |
 | `work image build` | Build the default `work-base:latest`; `--tag`/`--dockerfile` for custom images. |
+| `work image init` | Scaffold a personal-image Dockerfile (extends `work-base`) to customize. |
 | `work doctor` | Isolation + engine sanity check. |
 | `work --yes` / `-y` | Global flag: skip all destructive-operation confirmations. |
 
