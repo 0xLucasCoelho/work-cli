@@ -163,8 +163,32 @@ const RESERVED: &[&str] = &[
     "-V",
 ];
 
+/// Rewrite `work <cmd> help` -> `work help <cmd>` (and `work image build help` ->
+/// `work help image build`) so the natural trailing-help form works. clap only
+/// natively supports `work help <cmd>` and `work <cmd> --help`. PURE / testable.
+/// Only fires when the first token is a reserved command name, so it never
+/// collides with a real (non-reserved) workspace name.
+fn normalize_help_arg(raw: Vec<String>) -> Vec<String> {
+    let trailing_help = raw.last().is_some_and(|s| s == "help");
+    if raw.len() >= 2
+        && trailing_help
+        && !raw[0].starts_with('-')
+        && RESERVED.contains(&raw[0].as_str())
+    {
+        let mut out = Vec::with_capacity(raw.len());
+        out.push("help".to_string());
+        out.extend(raw[..raw.len() - 1].iter().cloned());
+        out
+    } else {
+        raw
+    }
+}
+
 fn main() -> Result<ExitCode> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    // Normalize `work <cmd> help` -> `work help <cmd>` so the trailing-help form
+    // works (clap only natively does `work help <cmd>` / `work <cmd> --help`).
+    let raw = normalize_help_arg(raw);
 
     // Bare workspace name dispatch: `work <ws>`.
     if let Some(first) = raw.first() {
@@ -174,7 +198,7 @@ fn main() -> Result<ExitCode> {
         }
     }
 
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(std::iter::once("work").chain(raw.iter().map(String::as_str)));
     match cli.command {
         None => commands::ls()?,
         Some(Command::New(a)) => commands::new(
@@ -212,4 +236,37 @@ fn main() -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn trailing_help_becomes_help_subcommand() {
+        assert_eq!(normalize_help_arg(v(&["new", "help"])), v(&["help", "new"]));
+        assert_eq!(normalize_help_arg(v(&["rm", "help"])), v(&["help", "rm"]));
+        assert_eq!(
+            normalize_help_arg(v(&["image", "build", "help"])),
+            v(&["help", "image", "build"])
+        );
+    }
+
+    #[test]
+    fn bare_workspace_name_not_rewritten() {
+        // "acme" is not a command, so `work acme help` stays as-is.
+        assert_eq!(
+            normalize_help_arg(v(&["acme", "help"])),
+            v(&["acme", "help"])
+        );
+    }
+
+    #[test]
+    fn help_subcommand_form_untouched() {
+        assert_eq!(normalize_help_arg(v(&["help", "new"])), v(&["help", "new"]));
+    }
 }
