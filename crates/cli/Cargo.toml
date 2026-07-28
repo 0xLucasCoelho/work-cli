@@ -1,0 +1,14 @@
+[package]
+name = "work"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "work"
+path = "src/main.rs"
+
+[dependencies]
+work-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
