@@ -156,7 +156,12 @@ impl DockerCli {
             .with_context(|| format!("spawning '{} {}'", self.binary, args.join(" ")))?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            bail!("'{} {}' failed: {}", self.binary, args.join(" "), stderr.trim());
+            bail!(
+                "'{} {}' failed: {}",
+                self.binary,
+                args.join(" "),
+                stderr.trim()
+            );
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
@@ -283,7 +288,9 @@ impl Engine for DockerCli {
         }
         // Capture output so the container ID doesn't leak, and so we can report
         // docker's stderr if creation fails.
-        let out = c.output().with_context(|| format!("running container {}", opts.name))?;
+        let out = c
+            .output()
+            .with_context(|| format!("running container {}", opts.name))?;
         if !out.status.success() {
             bail!(
                 "failed to create container {} (exit {:?}): {}",
@@ -391,7 +398,12 @@ impl Engine for DockerCli {
 
 /// Helper exposed to the `image` module: build `tag` from a context dir + Dockerfile path,
 /// inheriting the user's terminal so build logs stream.
-pub fn build_image_at(engine: &dyn Engine, tag: &str, context_dir: &Path, dockerfile: &Path) -> Result<()> {
+pub fn build_image_at(
+    engine: &dyn Engine,
+    tag: &str,
+    context_dir: &Path,
+    dockerfile: &Path,
+) -> Result<()> {
     let status = Command::new(engine.binary())
         .args(["build", "-t", tag, "-f"])
         .arg(dockerfile)

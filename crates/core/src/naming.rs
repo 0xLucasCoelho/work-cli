@@ -2,17 +2,7 @@
 
 /// Reserved tokens — equal to a CLI verb, so they cannot also be a workspace name.
 pub const RESERVED: &[&str] = &[
-    "new",
-    "all",
-    "ls",
-    "start",
-    "stop",
-    "fwd",
-    "config",
-    "image",
-    "doctor",
-    "help",
-    "version",
+    "new", "all", "ls", "start", "stop", "fwd", "config", "image", "doctor", "help", "version",
     "rm",
 ];
 

@@ -18,9 +18,15 @@ fn valid_names_accepted() {
 fn invalid_names_rejected() {
     assert_eq!(naming::validate_name(""), Err(NameError::Empty));
     assert_eq!(naming::validate_name("Acme"), Err(NameError::InvalidChar));
-    assert_eq!(naming::validate_name("acme_dev"), Err(NameError::InvalidChar));
+    assert_eq!(
+        naming::validate_name("acme_dev"),
+        Err(NameError::InvalidChar)
+    );
     assert_eq!(naming::validate_name("-acme"), Err(NameError::InvalidChar));
-    assert_eq!(naming::validate_name(&"a".repeat(41)), Err(NameError::TooLong));
+    assert_eq!(
+        naming::validate_name(&"a".repeat(41)),
+        Err(NameError::TooLong)
+    );
     assert_eq!(naming::validate_name("new"), Err(NameError::Reserved));
     assert_eq!(naming::validate_name("doctor"), Err(NameError::Reserved));
 }

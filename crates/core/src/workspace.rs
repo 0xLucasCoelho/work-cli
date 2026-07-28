@@ -53,8 +53,7 @@ impl Workspace {
         }
 
         let global = config::load_global()?;
-        let image = image
-            .unwrap_or_else(|| global.effective_default_image().to_string());
+        let image = image.unwrap_or_else(|| global.effective_default_image().to_string());
 
         // Ensure the base image exists; build the default if missing.
         if !engine.image_exists(&image)? {

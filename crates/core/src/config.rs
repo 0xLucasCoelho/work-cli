@@ -66,8 +66,8 @@ pub fn load_global() -> Result<GlobalConfig> {
             default_image: Some(DEFAULT_IMAGE.to_string()),
         });
     }
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let g: GlobalConfig =
         toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
     Ok(g)
@@ -102,9 +102,7 @@ pub fn list_workspace_names() -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
     let mut names = Vec::new();
-    for entry in
-        std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?
-    {
+    for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
         let entry = entry?;
         let path: &Path = &entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("toml") {
