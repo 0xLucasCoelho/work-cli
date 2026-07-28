@@ -27,3 +27,26 @@ pub fn build_image(engine: &dyn Engine, tag: &str, dockerfile_content: &str) -> 
     drop(dir);
     Ok(())
 }
+
+use std::path::Path;
+
+/// `work image build`: build the default image, or a custom `--tag` from a
+/// `--dockerfile` path. Building a non-default tag requires `--dockerfile`.
+pub fn build(engine: &dyn Engine, tag: Option<&str>, dockerfile: Option<&Path>) -> Result<()> {
+    let tag = tag.unwrap_or(DEFAULT_IMAGE);
+    match dockerfile {
+        Some(path) => {
+            let content = fs::read_to_string(path)
+                .with_context(|| format!("reading Dockerfile {}", path.display()))?;
+            build_image(engine, tag, &content)?;
+        }
+        None => {
+            if tag == DEFAULT_IMAGE {
+                build_default(engine)?;
+            } else {
+                anyhow::bail!("building a custom tag '{tag}' requires --dockerfile <path>");
+            }
+        }
+    }
+    Ok(())
+}

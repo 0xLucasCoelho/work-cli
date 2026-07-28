@@ -79,6 +79,23 @@ pub trait Engine: Send + Sync {
     fn container_networks(&self, name: &str) -> Result<BTreeSet<String>>;
     /// Inspect a container's mounts -> list of (source_name_or_path, destination).
     fn container_mounts(&self, name: &str) -> Result<Vec<(String, String)>>;
+    /// Generic `docker inspect --format` for a container (docker Go-template).
+    /// Used by `doctor` for restart-policy / user / image / port checks.
+    fn inspect_format(&self, name: &str, format: &str) -> Result<String>;
+
+    /// Pull an image if absent (custom workspace images).
+    fn pull_image(&self, image: &str) -> Result<()>;
+
+    /// Run a detached port-forwarder container on `network` that bridges
+    /// `127.0.0.1:host_port` (host) to `target:target_port` (in-network).
+    fn run_forwarder(
+        &self,
+        name: &str,
+        network: &str,
+        host_port: u16,
+        target: &str,
+        target_port: u16,
+    ) -> Result<()>;
 }
 
 // ---------- PURE selection ----------
@@ -393,6 +410,59 @@ impl Engine for DockerCli {
             })
             .collect();
         Ok(out)
+    }
+    fn inspect_format(&self, name: &str, format: &str) -> Result<String> {
+        self.run_capture(&["inspect", "--type", "container", "--format", format, name])
+    }
+    fn pull_image(&self, image: &str) -> Result<()> {
+        // Stream pull output to the user's terminal.
+        let status = self
+            .cmd()
+            .args(["pull", image])
+            .status()
+            .with_context(|| format!("pulling image {image}"))?;
+        if !status.success() {
+            bail!("pull of {image} failed (exit {:?})", status.code());
+        }
+        Ok(())
+    }
+    fn run_forwarder(
+        &self,
+        name: &str,
+        network: &str,
+        host_port: u16,
+        target: &str,
+        target_port: u16,
+    ) -> Result<()> {
+        let publish = format!("127.0.0.1:{host_port}:{host_port}");
+        let listen = format!("TCP-LISTEN:{host_port},fork,reuseaddr");
+        let connect = format!("TCP:{target}:{target_port}");
+        let out = self
+            .cmd()
+            .args([
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                name,
+                "--network",
+                network,
+                "--entrypoint",
+                "socat",
+                "-p",
+                &publish,
+                "alpine/socat",
+                &listen,
+                &connect,
+            ])
+            .output()?;
+        if !out.status.success() {
+            bail!(
+                "failed to start port forwarder: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(())
     }
 }
 

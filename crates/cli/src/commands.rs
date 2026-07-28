@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 
 use work_core::{
@@ -105,25 +105,66 @@ pub fn doctor() -> Result<ExitCode> {
     })
 }
 
-pub fn image_build() -> Result<()> {
+pub fn image_build(tag: Option<&str>, dockerfile: Option<&std::path::Path>) -> Result<()> {
     let engine = engine::detect()?;
-    image::build_default(&*engine)?;
-    println!("✓ built {}", config::DEFAULT_IMAGE);
+    let built = tag.unwrap_or(config::DEFAULT_IMAGE);
+    image::build(&*engine, tag, dockerfile)?;
+    println!("✓ built {built}");
     Ok(())
 }
 
-/// `work config <ws>` (Phase 2 will make this interactive). v1 prints the config.
+/// `work config <ws>`: print the (non-secret) workspace metadata.
 pub fn config_show(name: &str) -> Result<()> {
     let cfg = config::load_workspace(name)?;
     println!("{}", toml::to_string_pretty(&cfg)?);
     Ok(())
 }
 
-/// `work fwd` is not implemented in this build (planned for Phase 2).
-pub fn fwd_stub(ws: &str, port: u16) -> Result<()> {
-    println!("`work fwd` is not implemented in this build (planned for Phase 2).");
-    println!("would forward host :{port} -> {ws} :{port}");
+/// `work config <ws> --edit`: open the workspace config in `$EDITOR` (default
+/// `vi`), then re-validate, re-apply git identity, and recreate the container
+/// if the image changed.
+pub fn config_edit(name: &str) -> Result<()> {
+    let path = config::workspace_config_path(name);
+    if !path.exists() {
+        anyhow::bail!("workspace '{name}' has no config at {}", path.display());
+    }
+    let before = config::load_workspace(name)?;
+
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".into());
+    let status = std::process::Command::new(&editor)
+        .arg(&path)
+        .status()
+        .with_context(|| format!("launching editor '{editor}'"))?;
+    if !status.success() {
+        anyhow::bail!(
+            "editor '{editor}' exited with {:?}; config unchanged",
+            status.code()
+        );
+    }
+
+    // Re-validate the edited file by parsing it.
+    let _ = config::load_workspace(name)
+        .with_context(|| format!("edited config is invalid; fix {} and retry", path.display()))?;
+
+    let ws = Workspace::open(name)?;
+    if ws.cfg.image != before.image {
+        println!(
+            "image changed ({} -> {}); recreating container…",
+            before.image, ws.cfg.image
+        );
+        ws.recreate()?;
+    } else {
+        ws.apply_git_identity()?;
+    }
+    println!("✓ updated '{name}'");
     Ok(())
+}
+
+/// `work fwd <ws> <port>`: opt-in port bridge for the user's own logins.
+pub fn fwd(ws: &str, port: u16) -> Result<()> {
+    workspace::forward(ws, port)
 }
 
 #[derive(Args)]

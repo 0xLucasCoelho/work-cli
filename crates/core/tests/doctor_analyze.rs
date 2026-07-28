@@ -57,3 +57,118 @@ fn cross_volume_detects_any_overlap() {
     let results = analyze_cross_volume(&[probe_a, probe_b]);
     assert!(results.iter().any(|r| !r.ok));
 }
+
+use work_core::doctor::{analyze_hardening, HardeningProbe};
+
+fn hp(
+    ws: &str,
+    restart: &str,
+    user: &str,
+    image: &str,
+    cfg_image: &str,
+    ports: &str,
+) -> HardeningProbe {
+    HardeningProbe {
+        ws: ws.into(),
+        restart_policy: restart.into(),
+        user: user.into(),
+        image: image.into(),
+        configured_image: cfg_image.into(),
+        ports_json: ports.into(),
+    }
+}
+
+#[test]
+fn hardening_passes_for_clean_workspace() {
+    let p = hp(
+        "acme",
+        "unless-stopped",
+        "dev",
+        "work-base:latest",
+        "work-base:latest",
+        "{}",
+    );
+    let rs = analyze_hardening(&p);
+    assert!(rs.iter().all(|r| r.ok), "{:?}", rs);
+}
+
+#[test]
+fn hardening_flags_wrong_restart_policy() {
+    let p = hp(
+        "acme",
+        "always",
+        "dev",
+        "work-base:latest",
+        "work-base:latest",
+        "{}",
+    );
+    assert!(
+        analyze_hardening(&p)
+            .iter()
+            .find(|r| r.label == "acme:restart")
+            .unwrap()
+            .ok
+            == false
+    );
+}
+
+#[test]
+fn hardening_flags_root_user() {
+    let p = hp(
+        "acme",
+        "unless-stopped",
+        "root",
+        "work-base:latest",
+        "work-base:latest",
+        "{}",
+    );
+    assert!(
+        analyze_hardening(&p)
+            .iter()
+            .find(|r| r.label == "acme:user")
+            .unwrap()
+            .ok
+            == false
+    );
+}
+
+#[test]
+fn hardening_flags_image_mismatch() {
+    let p = hp(
+        "acme",
+        "unless-stopped",
+        "dev",
+        "node:20",
+        "work-base:latest",
+        "{}",
+    );
+    assert!(
+        analyze_hardening(&p)
+            .iter()
+            .find(|r| r.label == "acme:image")
+            .unwrap()
+            .ok
+            == false
+    );
+}
+
+#[test]
+fn hardening_flags_published_ports() {
+    let ports = r#"{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"8080"}]}"#;
+    let p = hp(
+        "acme",
+        "unless-stopped",
+        "dev",
+        "work-base:latest",
+        "work-base:latest",
+        ports,
+    );
+    assert!(
+        analyze_hardening(&p)
+            .iter()
+            .find(|r| r.label == "acme:ports")
+            .unwrap()
+            .ok
+            == false
+    );
+}

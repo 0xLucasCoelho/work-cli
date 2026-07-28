@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
@@ -32,10 +33,14 @@ enum Command {
     StopAll,
     /// Open all workspaces in a tmux session named `work`.
     All,
-    /// (opt-in, Phase 2) forward a host port into a workspace.
+    /// (opt-in) forward a host port into a workspace for your own logins.
     Fwd { ws: String, port: u16 },
-    /// Show a workspace's config (editing lands in Phase 2).
-    Config { ws: String },
+    /// Show a workspace's config; use --edit to open it in $EDITOR.
+    Config {
+        ws: String,
+        #[arg(long)]
+        edit: bool,
+    },
     /// Build/rebuild images.
     #[command(name = "image")]
     Image {
@@ -48,8 +53,13 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ImageCmd {
-    /// Build the default `work-base:latest` image.
-    Build,
+    /// Build the default `work-base:latest` image, or a custom one with --tag/--dockerfile.
+    Build {
+        #[arg(long)]
+        tag: Option<String>,
+        #[arg(long)]
+        dockerfile: Option<PathBuf>,
+    },
 }
 
 // Reserved tokens — if the first arg matches none and isn't a flag, treat it as
@@ -93,10 +103,18 @@ fn main() -> Result<ExitCode> {
         Some(Command::Stop { name }) => commands::stop(&name)?,
         Some(Command::StopAll) => commands::stop_all()?,
         Some(Command::All) => commands::all()?,
-        Some(Command::Fwd { ws, port }) => commands::fwd_stub(&ws, port)?,
-        Some(Command::Config { ws }) => commands::config_show(&ws)?,
+        Some(Command::Fwd { ws, port }) => commands::fwd(&ws, port)?,
+        Some(Command::Config { ws, edit }) => {
+            if edit {
+                commands::config_edit(&ws)?;
+            } else {
+                commands::config_show(&ws)?;
+            }
+        }
         Some(Command::Image { action }) => match action {
-            ImageCmd::Build => commands::image_build()?,
+            ImageCmd::Build { tag, dockerfile } => {
+                commands::image_build(tag.as_deref(), dockerfile.as_deref())?;
+            }
         },
         Some(Command::Doctor) => {
             return commands::doctor();

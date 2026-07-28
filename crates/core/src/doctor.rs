@@ -24,6 +24,17 @@ pub struct IsolationProbe {
     pub mounts: Vec<(String, String)>,
 }
 
+/// Inputs to the pure hardening check.
+#[derive(Debug, Clone)]
+pub struct HardeningProbe {
+    pub ws: String,
+    pub restart_policy: String,
+    pub user: String,
+    pub image: String,
+    pub configured_image: String,
+    pub ports_json: String,
+}
+
 /// A single workspace is isolated iff:
 /// - its only network is its own `work-net-<ws>`;
 /// - its only mount is its own `work-<ws>-home` at `/home/dev` (a *volume* mount).
@@ -102,7 +113,82 @@ pub fn analyze_cross_volume(probes: &[IsolationProbe]) -> Vec<CheckResult> {
         .collect()
 }
 
-/// Run the full doctor: engine sanity + per-workspace isolation.
+/// Count published host-port bindings from `{{json .NetworkSettings.Ports}}`.
+/// `{}` or null -> 0; `{"8080/tcp":[{"HostIp":"...","HostPort":"8080"}]}` -> 1.
+fn published_port_count(ports_json: &str) -> usize {
+    let v: serde_json::Value = serde_json::from_str(ports_json).unwrap_or(serde_json::Value::Null);
+    let Some(map) = v.as_object() else {
+        return 0;
+    };
+    map.values()
+        .filter_map(|b| b.as_array())
+        .map(|a| a.len())
+        .sum()
+}
+
+/// Per-workspace hardening: restart policy, non-root user, image matches
+/// config, and no published host ports (isolation). PURE.
+pub fn analyze_hardening(p: &HardeningProbe) -> Vec<CheckResult> {
+    let mut out = Vec::new();
+
+    let restart_ok = p.restart_policy == "unless-stopped";
+    out.push(CheckResult {
+        label: format!("{}:restart", p.ws),
+        ok: restart_ok,
+        detail: if restart_ok {
+            "restart=unless-stopped".into()
+        } else {
+            format!(
+                "restart policy must be 'unless-stopped', found '{}'",
+                p.restart_policy
+            )
+        },
+    });
+
+    let non_root = !matches!(p.user.as_str(), "root" | "0");
+    out.push(CheckResult {
+        label: format!("{}:user", p.ws),
+        ok: non_root,
+        detail: if non_root {
+            if p.user.is_empty() {
+                "non-root (image default user)".into()
+            } else {
+                format!("runs as '{}'", p.user)
+            }
+        } else {
+            "container must not run as root".into()
+        },
+    });
+
+    let img_ok = p.image == p.configured_image;
+    out.push(CheckResult {
+        label: format!("{}:image", p.ws),
+        ok: img_ok,
+        detail: if img_ok {
+            format!("image={}", p.image)
+        } else {
+            format!(
+                "container image '{}' != configured '{}'",
+                p.image, p.configured_image
+            )
+        },
+    });
+
+    let nports = published_port_count(&p.ports_json);
+    out.push(CheckResult {
+        label: format!("{}:ports", p.ws),
+        ok: nports == 0,
+        detail: if nports == 0 {
+            "no host ports published".into()
+        } else {
+            format!("workspace container publishes {nports} host port(s) — isolation risk")
+        },
+    });
+
+    out
+}
+
+/// Run the full doctor: engine sanity + per-workspace isolation + hardening.
 pub fn run(engine: &dyn Engine) -> Result<Vec<CheckResult>> {
     let mut results = Vec::new();
 
@@ -134,7 +220,6 @@ pub fn run(engine: &dyn Engine) -> Result<Vec<CheckResult>> {
                 let networks = engine.container_networks(&ctr)?;
                 let mounts = engine.container_mounts(&ctr)?;
                 let mut r = analyze_isolation(name, &networks, &mounts);
-                // Annotate with lifecycle state for readability.
                 r.detail = format!(
                     "[{}] {}",
                     match state {
@@ -149,6 +234,30 @@ pub fn run(engine: &dyn Engine) -> Result<Vec<CheckResult>> {
                     mounts,
                 });
                 results.push(r);
+
+                // Hardening (only meaningful when the container exists).
+                if let Ok(cfg) = config::load_workspace(name) {
+                    let restart = engine
+                        .inspect_format(&ctr, "{{.HostConfig.RestartPolicy.Name}}")
+                        .unwrap_or_default();
+                    let user = engine
+                        .inspect_format(&ctr, "{{.Config.User}}")
+                        .unwrap_or_default();
+                    let image = engine
+                        .inspect_format(&ctr, "{{.Config.Image}}")
+                        .unwrap_or_default();
+                    let ports = engine
+                        .inspect_format(&ctr, "{{json .NetworkSettings.Ports}}")
+                        .unwrap_or_else(|_| "{}".into());
+                    results.extend(analyze_hardening(&HardeningProbe {
+                        ws: name.clone(),
+                        restart_policy: restart,
+                        user,
+                        image,
+                        configured_image: cfg.image,
+                        ports_json: ports,
+                    }));
+                }
             }
         }
     }

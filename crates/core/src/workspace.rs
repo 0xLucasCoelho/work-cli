@@ -55,15 +55,8 @@ impl Workspace {
         let global = config::load_global()?;
         let image = image.unwrap_or_else(|| global.effective_default_image().to_string());
 
-        // Ensure the base image exists; build the default if missing.
-        if !engine.image_exists(&image)? {
-            if image == config::DEFAULT_IMAGE {
-                println!("image '{image}' not found; building it now…");
-                image::build_default(&*engine)?;
-            } else {
-                bail!("image '{image}' not found; build it or use `work image build`");
-            }
-        }
+        // Ensure the image exists: build the default, or pull a custom one.
+        ensure_image(&*engine, &image)?;
 
         let vol = naming::volume(name);
         let net = naming::network(name);
@@ -179,6 +172,42 @@ impl Workspace {
         }
         Ok(())
     }
+
+    /// Recreate this workspace's container from its current config (keeps the
+    /// volume + network). Used by `work config` when the image changes.
+    pub fn recreate(&self) -> Result<()> {
+        let ctr = naming::container(&self.cfg.name);
+        if self.engine.container_exists(&ctr)? {
+            self.engine.remove_container(&ctr)?;
+        }
+        ensure_image(&*self.engine, &self.cfg.image)?;
+        let opts = RunOpts {
+            name: ctr.clone(),
+            image: self.cfg.image.clone(),
+            network: naming::network(&self.cfg.name),
+            volume: naming::volume(&self.cfg.name),
+            volume_target: "/home/dev".into(),
+            workdir: "/home/dev".into(),
+            cmd: vec!["sleep".into(), "infinity".into()],
+        };
+        self.engine.run(&opts)?;
+        self.apply_git_identity()?;
+        Ok(())
+    }
+}
+
+/// Build the default image or pull a custom one so it is locally present.
+fn ensure_image(engine: &dyn Engine, image: &str) -> Result<()> {
+    if engine.image_exists(image)? {
+        return Ok(());
+    }
+    if image == config::DEFAULT_IMAGE {
+        println!("image '{image}' not found; building it now…");
+        image::build_default(engine)
+    } else {
+        println!("image '{image}' not found; pulling…");
+        engine.pull_image(image)
+    }
 }
 
 /// `work ls`: every workspace on disk with its container state.
@@ -193,6 +222,32 @@ pub fn list_all() -> Result<Vec<WorkspaceStatus>> {
         out.push(WorkspaceStatus { name, state });
     }
     Ok(out)
+}
+
+/// `work fwd <ws> <port>`: bridge `127.0.0.1:<port>` (host) to `<ws>:<port>`.
+/// Runs a detached forwarder on the workspace's dedicated network and follows
+/// its logs in the foreground; Ctrl-C tears the bridge down.
+pub fn forward(name: &str, port: u16) -> Result<()> {
+    let ws = Workspace::open(name)?;
+    ws.ensure_running()?;
+    let engine = ws.engine();
+    let fwd_name = format!("work-fwd-{name}-{port}");
+    let net = naming::network(name);
+    let target = naming::container(name);
+    if engine.container_exists(&fwd_name)? {
+        engine.remove_container(&fwd_name)?;
+    }
+    engine.run_forwarder(&fwd_name, &net, port, &target, port)?;
+    println!("Forwarding http://127.0.0.1:{port} -> {name}:{port}");
+    println!("(Ctrl-C to stop the bridge)");
+    // Follow the forwarder's logs until the user interrupts.
+    let _ = Command::new(engine.binary())
+        .args(["logs", "--follow", &fwd_name])
+        .status();
+    // Cleanup on exit (Ctrl-C / logs end).
+    let _ = engine.remove_container(&fwd_name);
+    println!("bridge stopped");
+    Ok(())
 }
 
 /// `work all`: open a tmux session `work` with one window per workspace.
