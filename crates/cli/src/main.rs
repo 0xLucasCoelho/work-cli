@@ -11,7 +11,8 @@ use commands::NewArgs;
 #[command(
     name = "work",
     version,
-    about = "Isolated multi-context session manager"
+    about = "Isolated multi-context session manager — one persistent Linux container per workspace",
+    after_help = "Tip: a bare `work <ws>` attaches to (or creates) that workspace's persistent in-container session. Use `work help <command>` for per-command details."
 )]
 struct Cli {
     /// Skip all destructive-operation confirmations (script-friendly).
@@ -24,56 +25,116 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Create an isolated workspace: volume + network + container.
+    ///
+    /// Each workspace is a fully isolated Linux container with its own named
+    /// volume at /home/dev and a dedicated network. Your host shell ($SHELL) is
+    /// auto-detected and used inside the container.
+    ///
+    /// Examples: `work new acme`; `work new acme --git-name 'Jane' --git-email j@x.io`;
+    /// `work new acme --import-shell-config` (seed ~/.zshrc); `work new acme --image my-work:latest`.
     New(NewArgs),
-    /// List workspaces, container state, and session liveness.
+    /// List workspaces with container state and session liveness.
+    ///
+    /// Columns: WORKSPACE, STATE (running/stopped/missing), SESSION (live if the
+    /// in-container tmux session `work` exists, else —).
     Ls,
-    /// Start a workspace container.
-    Start { name: String },
-    /// Stop a workspace container (ends its in-container session).
-    Stop { name: String },
+    /// Start a workspace container (creates it from config if missing).
+    Start {
+        /// Workspace to start.
+        name: String,
+    },
+    /// Stop a workspace container.
+    ///
+    /// Ends its in-container session and any running processes; files in the
+    /// volume persist. Warns (and asks) if a live session would be ended.
+    Stop {
+        /// Workspace to stop.
+        name: String,
+    },
     /// Stop every workspace.
     #[command(name = "stop-all")]
     StopAll,
-    /// Cockpit: tile all running workspaces' sessions in a host tmux.
+    /// Cockpit: tile every running workspace's session in a host tmux.
+    ///
+    /// Opens one host tmux session (prefix Ctrl-a) with a window per running
+    /// workspace, each attached to its in-container session. Stopped workspaces
+    /// are listed in a note. `work all` is an alias.
     Resume,
-    /// (alias of `resume`)
+    /// Alias of `resume`.
     All,
-    /// (opt-in) forward a host port into a workspace for your own logins.
-    Fwd { ws: String, port: u16 },
-    /// Show a workspace's config; use --edit to open it in $EDITOR.
-    Config {
+    /// (opt-in) Forward a host port into a workspace for your own logins.
+    ///
+    /// Bridges 127.0.0.1:<port> on the host to <ws>:<port> — e.g. so a
+    /// browser-based OAuth login inside the container can complete. Ctrl-C stops
+    /// the bridge.
+    ///
+    /// Example:
+    ///   work fwd acme 8080
+    Fwd {
+        /// Workspace to forward into.
         ws: String,
+        /// Port to bridge (used on both host and container).
+        port: u16,
+    },
+    /// Show a workspace's (non-secret) config; use --edit to open it in $EDITOR.
+    ///
+    /// On --edit: re-validates the file, re-applies git identity, and recreates
+    /// the container if the image changed (gated by the safety policy).
+    Config {
+        /// Workspace whose config to show or edit.
+        ws: String,
+        /// Open the config in $EDITOR (default vi), then re-apply/recreate.
         #[arg(long)]
         edit: bool,
     },
-    /// Build/rebuild images.
+    /// Build or scaffold workspace images.
     #[command(name = "image")]
     Image {
         #[command(subcommand)]
         action: ImageCmd,
     },
-    /// Remove a workspace: container + network + config (keeps the volume
-    /// unless --purge, which deletes it irreversibly).
+    /// Remove a workspace: container + network + config.
+    ///
+    /// Keeps the named volume by default (data-safe) — `work new <ws>` then
+    /// recreates the container with your files intact. --purge also deletes the
+    /// volume (irreversible; requires --yes or an interactive confirm).
+    ///
+    /// Examples: `work rm acme` keeps the volume; `work rm acme --purge -y` deletes it too.
     Rm {
+        /// Workspace to remove.
         ws: String,
+        /// Also delete the named volume (irreversible; requires --yes).
         #[arg(long)]
         purge: bool,
     },
     /// Isolation + engine sanity check.
+    ///
+    /// Verifies each workspace is on its own network, mounts only its own
+    /// volume, runs non-root, uses the configured image, and publishes no host
+    /// ports.
     Doctor,
 }
 
 #[derive(Subcommand)]
 enum ImageCmd {
-    /// Build the default `work-base:latest` image, or a custom one with --tag/--dockerfile.
+    /// Build the default `work-base:latest`, or a custom image.
+    ///
+    /// Examples: `work image build` (work-base:latest); `work image build --tag my-work:latest --dockerfile ./Dockerfile.work`.
     Build {
+        /// Image tag to build (defaults to work-base:latest).
         #[arg(long)]
         tag: Option<String>,
+        /// Path to a Dockerfile (required for a non-default --tag).
         #[arg(long)]
         dockerfile: Option<PathBuf>,
     },
     /// Scaffold a personal workspace Dockerfile (extends work-base) to customize.
+    ///
+    /// Writes a starter Dockerfile with a working baseline, commented tool
+    /// examples, and the glibc/musl gotcha documented. Edit it, then
+    /// `work image build`.
     Init {
+        /// Where to write the Dockerfile (defaults to ./Dockerfile.work).
         #[arg(long)]
         output: Option<PathBuf>,
     },

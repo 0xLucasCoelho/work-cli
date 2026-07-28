@@ -292,11 +292,15 @@ fn confirm(
 
 #[derive(Args)]
 pub struct NewArgs {
+    /// Workspace name: lowercase [a-z0-9][a-z0-9-]*, not a reserved command.
     pub name: String,
+    /// Container image to use (defaults to the configured default_image).
     #[arg(long)]
     pub image: Option<String>,
+    /// Optional git user.name to set inside the workspace.
     #[arg(long = "git-name")]
     pub git_name: Option<String>,
+    /// Optional git user.email to set inside the workspace.
     #[arg(long = "git-email")]
     pub git_email: Option<String>,
     /// Copy your shell rc into the workspace (no value = detected ~/.zshrc/~/.bashrc).
