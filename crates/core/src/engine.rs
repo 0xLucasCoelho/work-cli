@@ -72,6 +72,13 @@ pub trait Engine: Send + Sync {
     fn exec_interactive(&self, name: &str, cmd: &[&str]) -> Result<()>;
     /// Non-interactive exec — captures stdout.
     fn exec_capture(&self, name: &str, cmd: &[&str]) -> Result<String>;
+    /// True iff container `name` has a tmux server with `session`. Returns
+    /// `false` (NOT an error) when the container is missing/stopped or the
+    /// session is absent — so `ls`/`stop`/`rm` never choke on a downed box.
+    fn session_exists(&self, name: &str, session: &str) -> Result<bool>;
+    /// Copy host file `src` into container `name` at `dest`, owned by `dev`.
+    /// `docker cp` + `chown dev:dev` (as root). Creates no host bind-mount.
+    fn seed_file(&self, name: &str, src: &Path, dest: &str) -> Result<()>;
 
     fn image_exists(&self, image: &str) -> Result<bool>;
 
@@ -352,6 +359,26 @@ impl Engine for DockerCli {
             );
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+    fn session_exists(&self, name: &str, session: &str) -> Result<bool> {
+        // Any non-zero exit (container missing / not running / no session) -> false.
+        let code = self
+            .cmd()
+            .args(["exec", name, "tmux", "has-session", "-t", session])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        Ok(code.success())
+    }
+    fn seed_file(&self, name: &str, src: &Path, dest: &str) -> Result<()> {
+        let src_s = src.to_string_lossy();
+        let target = format!("{name}:{dest}");
+        self.run_success(&["cp", &src_s, &target])
+            .with_context(|| format!("copying {} into {target}", src.display()))?;
+        // `docker cp` preserves source uid/gid numerically; chown to dev as root.
+        self.run_success(&["exec", "--user", "root", name, "chown", "dev:dev", dest])
+            .with_context(|| format!("chown {dest} to dev"))?;
+        Ok(())
     }
 
     fn image_exists(&self, image: &str) -> Result<bool> {

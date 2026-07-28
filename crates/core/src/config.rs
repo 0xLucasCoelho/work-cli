@@ -14,6 +14,12 @@ pub const DEFAULT_IMAGE: &str = "work-base:latest";
 pub struct GlobalConfig {
     #[serde(default = "default_image")]
     pub default_image: Option<String>,
+    /// Optional global default rc to seed into every new workspace (off by default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_shell_config: Option<PathBuf>,
+    /// Optional global default .tmux.conf to seed into every new workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_tmux_config: Option<PathBuf>,
 }
 
 fn default_image() -> Option<String> {
@@ -64,6 +70,8 @@ pub fn load_global() -> Result<GlobalConfig> {
     if !path.exists() {
         return Ok(GlobalConfig {
             default_image: Some(DEFAULT_IMAGE.to_string()),
+            import_shell_config: None,
+            import_tmux_config: None,
         });
     }
     let raw =
@@ -113,4 +121,52 @@ pub fn list_workspace_names() -> Result<Vec<String>> {
     }
     names.sort();
     Ok(names)
+}
+
+// ---------- familiarity: shell detection + import sources ----------
+
+/// Detected host shell, clamped to a shell the base image ships (zsh|bash).
+/// Anything else (fish/nu/sh/unknown/unset) falls back to `zsh`.
+pub fn detect_shell() -> String {
+    let sh = std::env::var("SHELL")
+        .ok()
+        .and_then(|s| {
+            Path::new(&s)
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    match sh.as_str() {
+        "zsh" | "bash" => sh,
+        _ => "zsh".to_string(),
+    }
+}
+
+/// rc filename for a resolved shell; non-zsh -> `.bashrc`.
+pub fn rc_name(shell: &str) -> &'static str {
+    if shell == "zsh" {
+        ".zshrc"
+    } else {
+        ".bashrc"
+    }
+}
+
+/// Where a seeded config file comes from (per-workspace flag, possibly from the
+/// global default). `Auto` resolves to the detected default path at seed time.
+#[derive(Debug, Clone)]
+pub enum ImportSrc {
+    Auto,
+    Explicit(PathBuf),
+}
+
+impl ImportSrc {
+    /// Resolve to a concrete host path. `Auto` uses `~/<auto_name>`.
+    pub fn to_path(&self, auto_name: &str) -> PathBuf {
+        match self {
+            ImportSrc::Explicit(p) => p.clone(),
+            ImportSrc::Auto => dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(auto_name),
+        }
+    }
 }

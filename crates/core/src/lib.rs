@@ -9,4 +9,5 @@ pub mod engine;
 pub mod error;
 pub mod image;
 pub mod naming;
+pub mod safety;
 pub mod workspace;

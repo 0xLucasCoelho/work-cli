@@ -3,7 +3,7 @@ FROM node:20-bookworm-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git openssh-client ca-certificates tmux zsh curl jq build-essential sudo \
+      git openssh-client ca-certificates tmux zsh bash curl jq build-essential sudo \
  && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -d /home/dev -s /usr/bin/zsh dev \
