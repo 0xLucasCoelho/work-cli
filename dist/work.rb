@@ -13,11 +13,11 @@
 
 class Work < Formula
   desc "Isolated multi-context session manager for developers"
-  homepage "https://github.com/lucascoelho/work-cli"
-  url "https://github.com/lucascoelho/work-cli/archive/refs/tags/v0.1.0.tar.gz"
+  homepage "https://github.com/coelhucas-dev/work-cli"
+  url "https://github.com/coelhucas-dev/work-cli/archive/refs/tags/v0.1.0.tar.gz"
   # sha256 "REPLACE_WITH_RELEASE_TARBALL_SHA256"
   license "MIT"
-  head "https://github.com/lucascoelho/work-cli.git", branch: "main"
+  head "https://github.com/coelhucas-dev/work-cli.git", branch: "main"
 
   # `work` shells out to a container runtime; recommend OrbStack or Docker.
   depends_on "rust" => :build

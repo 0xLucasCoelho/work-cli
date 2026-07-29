@@ -1,2 +1,5 @@
 /target
 # Cargo.lock IS committed: this workspace ships a binary.
+
+# Personal image recipes are local-only (not part of the OSS project).
+/Dockerfile.personal

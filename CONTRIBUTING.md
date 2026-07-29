@@ -14,7 +14,7 @@ scope — see [`docs/superpowers/specs/`](docs/superpowers/specs/) for the desig
 ## Development setup
 
 ```bash
-git clone https://github.com/lucascoelho/work-cli
+git clone https://github.com/coelhucas-dev/work-cli
 cd work-cli
 cargo build --workspace
 cargo test --workspace

@@ -14,7 +14,7 @@ terminal: attach to a persistent session, or tile all live sessions in a cockpit
 > (Claude Code, Codex, z.ai, Gemini CLI, …) inside each container. `work`
 > provides the sandbox; it never touches your secrets.
 
-[![CI](https://github.com/lucascoelho/work-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/lucascoelho/work-cli/actions/workflows/ci.yml)
+[![CI](https://github.com/coelhucas-dev/work-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/coelhucas-dev/work-cli/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Requirements
@@ -30,7 +30,7 @@ terminal: attach to a persistent session, or tile all live sessions in a cockpit
 From source (for now; Homebrew tap + release binaries are planned):
 
 ```bash
-cargo install --git https://github.com/lucascoelho/work-cli
+cargo install --git https://github.com/coelhucas-dev/work-cli
 # or, from a clone:
 cargo install --path .
 ```
