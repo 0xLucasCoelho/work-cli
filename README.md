@@ -102,6 +102,7 @@ inside the container. You can optionally seed a verbatim copy of your own config
 work new acme --import-shell-config            # copies ~/.zshrc (or ~/.bashrc)
 work new acme --import-shell-config ~/my.zshrc # copies that file -> /home/dev/.zshrc
 work new acme --import-tmux-config             # copies ~/.tmux.conf -> /home/dev/.tmux.conf
+work new acme --import-starship-config          # copies ~/.config/starship.toml -> /home/dev/.config/starship.toml
 ```
 
 `work` prints a warning when it copies a config — **make sure it is secret-free**,
@@ -150,6 +151,11 @@ when = """ test -n "$WORK" """
 format = '[$output]($style) '
 style = 'bold magenta'
 ```
+
+To ship that snippet into every new workspace automatically, put it in
+`~/.config/starship.toml` on the host and pass `--import-starship-config` (or set
+`import_starship_config` globally) — `work` seeds it to
+`/home/dev/.config/starship.toml`.
 
 ## Custom images (your tools, baked in)
 
@@ -202,7 +208,7 @@ work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 
 | Command | Effect |
 |---|---|
-| `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-tmux-config [<path>]`. |
+| `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-tmux-config [<path>]`, `--import-starship-config [<path>]`. |
 | `work <ws>` | Attach to (or create) the persistent in-container session. `Ctrl-b d` detaches. |
 | `work ls` | List workspaces with state and session liveness (`live`/`—`). |
 | `work start <ws>` / `work stop <ws>` | Lifecycle. `stop` ends the session (warns if one is live). |
@@ -228,7 +234,7 @@ only when a live session would be ended. `--yes`/`-y` skips all prompts.
 Non-secret metadata lives under `~/.config/work/`:
 
 ```
-~/.config/work/config.toml              # default_image, import_shell_config, import_tmux_config
+~/.config/work/config.toml              # default_image, import_shell_config, import_tmux_config, import_starship_config
 ~/.config/work/workspaces/<ws>.toml     # per-workspace: image, git identity, shell, …
 ```
 

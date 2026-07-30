@@ -208,6 +208,7 @@ fn main() -> Result<ExitCode> {
             a.git_email,
             a.import_shell_config,
             a.import_tmux_config,
+            a.import_starship_config,
         )?,
         Some(Command::Ls) => commands::ls()?,
         Some(Command::Start { name }) => commands::start(&name)?,

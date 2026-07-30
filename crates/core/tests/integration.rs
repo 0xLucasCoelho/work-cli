@@ -48,6 +48,7 @@ fn workspace_create_shell_ready_doctor_then_stop() {
         Some("it@test.io".into()),
         None,
         None,
+        None,
     )
     .expect("create workspace");
     assert_eq!(ws.cfg.image, config::DEFAULT_IMAGE);

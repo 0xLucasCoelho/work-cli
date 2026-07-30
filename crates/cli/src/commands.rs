@@ -18,6 +18,7 @@ pub fn new(
     git_email: Option<String>,
     import_shell_config: Option<String>,
     import_tmux_config: Option<String>,
+    import_starship_config: Option<String>,
 ) -> Result<()> {
     // Flag value: None=off, ""=auto (detected rc), <path>=explicit.
     let to_src = |v: Option<String>| match v {
@@ -32,6 +33,7 @@ pub fn new(
         git_email,
         to_src(import_shell_config),
         to_src(import_tmux_config),
+        to_src(import_starship_config),
     )?;
     println!("✓ created workspace '{}'", ws.cfg.name);
     println!();
@@ -309,4 +311,7 @@ pub struct NewArgs {
     /// Copy a .tmux.conf into the workspace (no value = ~/.tmux.conf).
     #[arg(long = "import-tmux-config", num_args = 0..=1, default_missing_value = "")]
     pub import_tmux_config: Option<String>,
+    /// Copy a starship.toml into the workspace (no value = ~/.config/starship.toml).
+    #[arg(long = "import-starship-config", num_args = 0..=1, default_missing_value = "")]
+    pub import_starship_config: Option<String>,
 }

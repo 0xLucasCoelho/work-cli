@@ -378,6 +378,16 @@ impl Engine for DockerCli {
     fn seed_file(&self, name: &str, src: &Path, dest: &str) -> Result<()> {
         let src_s = src.to_string_lossy();
         let target = format!("{name}:{dest}");
+        // Ensure dest's parent dir exists (e.g. /home/dev/.config for starship.toml);
+        // `docker cp` won't create intermediate dirs. Idempotent — /home/dev exists
+        // for rc/.tmux.conf seeds, so this is a no-op there.
+        if let Some(parent) = std::path::Path::new(dest).parent() {
+            if !parent.as_os_str().is_empty() {
+                let parent_s = parent.to_string_lossy();
+                let _ =
+                    self.run_success(&["exec", "--user", "root", name, "mkdir", "-p", &parent_s]);
+            }
+        }
         self.run_success(&["cp", &src_s, &target])
             .with_context(|| format!("copying {} into {target}", src.display()))?;
         // `docker cp` preserves source uid/gid numerically; chown to dev as root.

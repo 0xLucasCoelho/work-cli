@@ -46,6 +46,7 @@ impl Workspace {
         git_email: Option<String>,
         import_shell: Option<ImportSrc>,
         import_tmux: Option<ImportSrc>,
+        import_starship: Option<ImportSrc>,
     ) -> Result<Self> {
         naming::validate_name(name)?;
         if config::workspace_exists(name) {
@@ -77,6 +78,13 @@ impl Workspace {
                     s.to_path(".tmux.conf"),
                     "/home/dev/.tmux.conf".into(),
                     "tmux",
+                )
+            }),
+            resolve_import(import_starship, global.import_starship_config.as_deref()).map(|s| {
+                (
+                    s.to_path(".config/starship.toml"),
+                    "/home/dev/.config/starship.toml".into(),
+                    "starship",
                 )
             }),
         ]
