@@ -3,6 +3,7 @@
 //! Isolation logic lives in exactly one place — this crate. The CLI is a thin
 //! client over it.
 
+pub mod banner;
 pub mod config;
 pub mod doctor;
 pub mod engine;
