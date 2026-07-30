@@ -259,7 +259,9 @@ impl Workspace {
         ) {
             return false;
         }
-        self.engine.session_exists(&ctr, "work").unwrap_or(false)
+        self.engine
+            .session_exists(&ctr, naming::session(&self.cfg.name))
+            .unwrap_or(false)
     }
 
     /// Apply optional git identity (user.name/user.email) inside the container.
@@ -359,7 +361,9 @@ pub fn list_all() -> Result<Vec<WorkspaceStatus>> {
             .container_state(&ctr)
             .unwrap_or(ContainerState::Missing);
         let session_live = state == ContainerState::Running
-            && engine.session_exists(&ctr, "work").unwrap_or(false);
+            && engine
+                .session_exists(&ctr, naming::session(&name))
+                .unwrap_or(false);
         out.push(WorkspaceStatus {
             name,
             state,
