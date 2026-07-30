@@ -166,20 +166,76 @@ impl Workspace {
     }
 
     /// `work <ws>`: ensure running, then attach-or-create the in-container tmux
-    /// session `work`. The session (and anything started inside it) survives
+    /// session named after the workspace. Prints an identity banner and sets the
+    /// terminal title first. The session (and anything started inside it) survives
     /// detach / closing the terminal; it does NOT survive `work stop`.
     pub fn shell(&self) -> Result<()> {
         self.ensure_running()?;
         let ctr = naming::container(&self.cfg.name);
         let shell = self.cfg.shell.as_deref().unwrap_or("zsh");
-        // Suppress the per-window hint when launched as a cockpit child.
+        let session = naming::session(&self.cfg.name);
+
+        // Banner + detach hint (suppressed in cockpit windows).
         if std::env::var_os("WORK_COCKPIT").is_none() {
+            let show = config::load_global().map(|g| g.show_banner).unwrap_or(true);
+            if show {
+                self.print_banner(&ctr);
+            }
             println!("Ctrl-b d or close terminal = detach (keeps running) · exit = close session");
         }
+
+        // Lossless one-time migration: rename a stale `work` session to <ws> in
+        // place (running shells/agents inside it survive). No-op once renamed, or
+        // for a workspace literally named "work".
+        if session != "work"
+            && self.engine.session_exists(&ctr, "work").unwrap_or(false)
+            && !self.engine.session_exists(&ctr, session).unwrap_or(false)
+        {
+            let _ = self
+                .engine
+                .exec_capture(&ctr, &["tmux", "rename-session", "-t", "work", session]);
+        }
+
+        // Name the terminal tab (best-effort). The tmux window name is set via -n.
+        {
+            use std::io::Write;
+            print!("\x1b]0;work:{}\x07", self.cfg.name);
+            let _ = std::io::stdout().flush();
+        }
+
         self.engine.exec_interactive(
             &ctr,
-            &["tmux", "new-session", "-A", "-s", "work", "--", shell, "-l"],
+            &[
+                "tmux",
+                "new-session",
+                "-A",
+                "-s",
+                session,
+                "-n",
+                session,
+                "--",
+                shell,
+                "-l",
+            ],
         )
+    }
+
+    /// Gather hostname/OS/git-branch via one `docker exec` and print the banner.
+    /// Fail-soft: any error renders the dynamic fields as "—".
+    fn print_banner(&self, ctr: &str) {
+        let probe = "h=$(hostname 2>/dev/null); . /etc/os-release 2>/dev/null; s=${PRETTY_NAME:-}; g=$(git -C /home/dev rev-parse --abbrev-ref HEAD 2>/dev/null || true); printf '%s\\t%s\\t%s' \"$h\" \"$s\" \"$g\"";
+        let gathered = self
+            .engine
+            .exec_capture(ctr, &["bash", "-c", probe])
+            .unwrap_or_default();
+        let mut parts = gathered.splitn(3, '\t');
+        let hostname = parts.next().filter(|s| !s.is_empty()).unwrap_or("—");
+        let system = parts.next().filter(|s| !s.is_empty()).unwrap_or("—");
+        let git = parts.next().filter(|s| !s.is_empty()).unwrap_or("—");
+        println!(
+            "{}",
+            crate::banner::compose(&self.cfg.name, &self.cfg.image, system, hostname, git)
+        );
     }
 
     pub fn status(&self) -> Result<WorkspaceStatus> {
