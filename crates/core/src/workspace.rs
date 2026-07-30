@@ -39,6 +39,7 @@ impl Workspace {
 
     /// `work new <ws>`: create volume + network + container, persist config,
     /// and (optionally) seed shell/tmux configs for familiarity.
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         name: &str,
         image: Option<String>,
@@ -47,6 +48,8 @@ impl Workspace {
         import_shell: Option<ImportSrc>,
         import_tmux: Option<ImportSrc>,
         import_starship: Option<ImportSrc>,
+        import_dotfiles: Option<std::path::PathBuf>,
+        use_author_default: bool,
     ) -> Result<Self> {
         naming::validate_name(name)?;
         if config::workspace_exists(name) {
@@ -62,6 +65,10 @@ impl Workspace {
 
         let global = config::load_global()?;
         let image = image.unwrap_or_else(|| global.effective_default_image().to_string());
+        // Optional dotfiles tree import (explicit --import-dotfiles overrides the
+        // global default; --use-author-default falls back to the embedded templates).
+        let dotfiles_dir = import_dotfiles.or(global.import_dotfiles.clone());
+        let seed_author_default = use_author_default && dotfiles_dir.is_none();
 
         // Ensure the image exists: build the default, or pull a custom one.
         ensure_image(&*engine, &image)?;
@@ -99,6 +106,14 @@ impl Workspace {
                 );
             }
         }
+        if let Some(dir) = &dotfiles_dir {
+            if !dir.exists() {
+                bail!(
+                    "dotfiles dir not found at {}; pass a path to --import-dotfiles",
+                    dir.display()
+                );
+            }
+        }
 
         let vol = naming::volume(name);
         let net = naming::network(name);
@@ -115,6 +130,27 @@ impl Workspace {
         }
         let opts = run_opts(name, &image);
         engine.run(&opts)?;
+
+        // Seed the dotfiles tree first (explicit dir, or the author's embedded
+        // templates via --use-author-default) so per-file imports below can still
+        // override individual files like .zshrc.
+        if let Some(dir) = &dotfiles_dir {
+            engine
+                .seed_dir(&ctr, dir, "/home/dev")
+                .with_context(|| format!("seeding dotfiles from {}", dir.display()))?;
+            println!(
+                "⚠  Copied dotfiles from {} into '{name}'. Ensure they contain no secrets — they now live in that workspace's volume.",
+                dir.display()
+            );
+        } else if seed_author_default {
+            let extracted = crate::templates::extract_to_tempdir()?;
+            engine
+                .seed_dir(&ctr, extracted.path(), "/home/dev")
+                .context("seeding author-default dotfiles")?;
+            println!(
+                "⚠  Copied the author's default dotfiles into '{name}'. Ensure they contain no secrets — they now live in that workspace's volume."
+            );
+        }
 
         // Seed validated configs (verbatim, warned) + suppress the shell's
         // first-run prompt (the named volume overlays the image's /home/dev).

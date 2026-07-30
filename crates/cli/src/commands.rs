@@ -11,6 +11,7 @@ use work_core::{
     workspace::{self, Workspace, WorkspaceStatus},
 };
 
+#[allow(clippy::too_many_arguments)]
 pub fn new(
     name: &str,
     image: Option<String>,
@@ -19,6 +20,8 @@ pub fn new(
     import_shell_config: Option<String>,
     import_tmux_config: Option<String>,
     import_starship_config: Option<String>,
+    import_dotfiles: Option<std::path::PathBuf>,
+    use_author_default: bool,
 ) -> Result<()> {
     // Flag value: None=off, ""=auto (detected rc), <path>=explicit.
     let to_src = |v: Option<String>| match v {
@@ -34,6 +37,8 @@ pub fn new(
         to_src(import_shell_config),
         to_src(import_tmux_config),
         to_src(import_starship_config),
+        import_dotfiles,
+        use_author_default,
     )?;
     println!("✓ created workspace '{}'", ws.cfg.name);
     println!();
@@ -314,4 +319,10 @@ pub struct NewArgs {
     /// Copy a starship.toml into the workspace (no value = ~/.config/starship.toml).
     #[arg(long = "import-starship-config", num_args = 0..=1, default_missing_value = "")]
     pub import_starship_config: Option<String>,
+    /// Recursively copy a dotfiles directory into the workspace's /home/dev.
+    #[arg(long = "import-dotfiles")]
+    pub import_dotfiles: Option<std::path::PathBuf>,
+    /// Seed the author's bundled dotfile templates (from the repo) into the workspace.
+    #[arg(long = "use-author-default")]
+    pub use_author_default: bool,
 }

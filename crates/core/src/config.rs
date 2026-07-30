@@ -23,6 +23,9 @@ pub struct GlobalConfig {
     /// Optional global default starship.toml to seed into every new workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_starship_config: Option<PathBuf>,
+    /// Optional global default dotfiles directory to seed (recursively) per-workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_dotfiles: Option<PathBuf>,
     /// Print the in-container identity banner on `work <ws>` attach (default on).
     #[serde(default = "default_show_banner")]
     pub show_banner: bool,
@@ -83,6 +86,7 @@ pub fn load_global() -> Result<GlobalConfig> {
             import_shell_config: None,
             import_tmux_config: None,
             import_starship_config: None,
+            import_dotfiles: None,
             show_banner: true,
         });
     }

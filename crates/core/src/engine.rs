@@ -81,6 +81,9 @@ pub trait Engine: Send + Sync {
     /// Copy host file `src` into container `name` at `dest`, owned by `dev`.
     /// `docker cp` + `chown dev:dev` (as root). Creates no host bind-mount.
     fn seed_file(&self, name: &str, src: &Path, dest: &str) -> Result<()>;
+    /// Recursively copy a host directory's *contents* into `dest_dir` in the
+    /// container, then chown -R to dev. Mirrors seed_file for a whole tree.
+    fn seed_dir(&self, name: &str, src_dir: &Path, dest_dir: &str) -> Result<()>;
 
     fn image_exists(&self, image: &str) -> Result<bool>;
 
@@ -393,6 +396,19 @@ impl Engine for DockerCli {
         // `docker cp` preserves source uid/gid numerically; chown to dev as root.
         self.run_success(&["exec", "--user", "root", name, "chown", "dev:dev", dest])
             .with_context(|| format!("chown {dest} to dev"))?;
+        Ok(())
+    }
+    fn seed_dir(&self, name: &str, src_dir: &Path, dest_dir: &str) -> Result<()> {
+        // `docker cp <src>/. <dest>` copies the directory's CONTENTS (preserving
+        // the tree, e.g. .config/nvim) into dest_dir; then chown -R to dev.
+        let src_s = format!("{}/.", src_dir.display());
+        let target = format!("{name}:{dest_dir}");
+        self.run_success(&["cp", &src_s, &target])
+            .with_context(|| format!("copying {} into {target}", src_dir.display()))?;
+        self.run_success(&[
+            "exec", "--user", "root", name, "chown", "-R", "dev:dev", dest_dir,
+        ])
+        .with_context(|| format!("chown -R {dest_dir} to dev"))?;
         Ok(())
     }
 

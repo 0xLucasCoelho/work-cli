@@ -44,6 +44,23 @@ The first public release. Not yet tagged — see
   (data loss = volume purge; work loss = stop/rm/recreate with a live session);
   `--yes`/`-y` skips; non-interactive contexts refuse without `--yes`.
 
+### Added — in-container identity
+- `work <ws>` prints a fastfetch-style **identity banner** on attach and sets the
+  terminal title; the in-container tmux session is named after the workspace (legacy
+  `work` sessions are renamed in place, losslessly).
+- Every container exports `WORK=<ws>` / `WORKSPACE=<ws>`; the no-import default shell
+  (zsh) gets a workspace-aware prompt.
+- `work new --import-starship-config [<path>]` seeds a `starship.toml` (e.g. to drop
+  Starship's `[Docker]` marker or show `$WORK`). `show_banner` global opt-out.
+
+### Added — dotfiles & author default
+- `work new --import-dotfiles <dir>` recursively seeds a dotfiles tree into `/home/dev`
+  (covers `.config/nvim`, `.config/atuin`, …); optional global `import_dotfiles`.
+- `work new --use-author-default` seeds the repo's bundled `personal/dotfiles` templates
+  (embedded in the binary at build) + the configured `default_image` — one-command setup.
+- `Dockerfile.personal` (the `work-lucas` image) bakes claude, codex, omp, Antigravity
+  (`agy`), and nvim alongside the existing CLI tools.
+
 ### Security
 - Cross-context isolation enforced at the container/network/volume boundary;
   `work doctor` verifies it. `work` never reads, writes, or moves secrets.

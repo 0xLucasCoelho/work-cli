@@ -209,6 +209,8 @@ fn main() -> Result<ExitCode> {
             a.import_shell_config,
             a.import_tmux_config,
             a.import_starship_config,
+            a.import_dotfiles,
+            a.use_author_default,
         )?,
         Some(Command::Ls) => commands::ls()?,
         Some(Command::Start { name }) => commands::start(&name)?,

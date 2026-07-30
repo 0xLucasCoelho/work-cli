@@ -103,6 +103,8 @@ work new acme --import-shell-config            # copies ~/.zshrc (or ~/.bashrc)
 work new acme --import-shell-config ~/my.zshrc # copies that file -> /home/dev/.zshrc
 work new acme --import-tmux-config             # copies ~/.tmux.conf -> /home/dev/.tmux.conf
 work new acme --import-starship-config          # copies ~/.config/starship.toml -> /home/dev/.config/starship.toml
+work new acme --import-dotfiles ~/dotfiles        # recursively copies that dir -> /home/dev
+work new acme --use-author-default                # seed the repo's bundled personal/dotfiles templates
 ```
 
 `work` prints a warning when it copies a config — **make sure it is secret-free**,
@@ -110,6 +112,14 @@ since it now lives in that workspace's volume. You can set a global default in
 `~/.config/work/config.toml` (`import_shell_config = "…"`). A copied rc may
 reference host paths that don't exist in the container; the copy is verbatim and
 best-effort.
+
+`--import-dotfiles <dir>` copies an entire directory tree (e.g. your `.zshrc`,
+`.config/nvim`, `.config/atuin`) into `/home/dev` in one shot — useful for configs
+that aren't single files. `--use-author-default` does the same with the **bundled
+`personal/dotfiles` templates** (embedded in the binary at build) plus the configured
+`default_image`, so `work new <ws> --use-author-default` reproduces the author's full
+setup. Both also read a global default (`import_dotfiles = "…"`). The same secret-free
+warning applies; explicit `--import-*` flags override individual files from a dotfiles seed.
 
 ## A separated environment (in-container identity)
 
@@ -208,7 +218,7 @@ work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 
 | Command | Effect |
 |---|---|
-| `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-tmux-config [<path>]`, `--import-starship-config [<path>]`. |
+| `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-tmux-config [<path>]`, `--import-starship-config [<path>]`, `--import-dotfiles <dir>`, `--use-author-default`. |
 | `work <ws>` | Attach to (or create) the persistent in-container session. `Ctrl-b d` detaches. |
 | `work ls` | List workspaces with state and session liveness (`live`/`—`). |
 | `work start <ws>` / `work stop <ws>` | Lifecycle. `stop` ends the session (warns if one is live). |
@@ -234,7 +244,7 @@ only when a live session would be ended. `--yes`/`-y` skips all prompts.
 Non-secret metadata lives under `~/.config/work/`:
 
 ```
-~/.config/work/config.toml              # default_image, import_shell_config, import_tmux_config, import_starship_config
+~/.config/work/config.toml              # default_image, import_shell_config, import_tmux_config, import_starship_config, import_dotfiles
 ~/.config/work/workspaces/<ws>.toml     # per-workspace: image, git identity, shell, …
 ```
 
