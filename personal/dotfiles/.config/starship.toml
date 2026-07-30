@@ -1,0 +1,8 @@
+[container]
+disabled = true
+
+[custom.work]
+command = "echo $WORK"
+when = """ test -n "$WORK" """
+format = '[$output]($style) '
+style = "bold magenta"
