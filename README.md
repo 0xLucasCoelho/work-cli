@@ -110,6 +110,47 @@ since it now lives in that workspace's volume. You can set a global default in
 reference host paths that don't exist in the container; the copy is verbatim and
 best-effort.
 
+## A separated environment (in-container identity)
+
+Every `work <ws>` attach makes the workspace unmistakably identifiable as its own
+isolated environment:
+
+- **Identity banner.** `work` prints a compact block — workspace, image, system,
+  hostname, `network: isolated · single-context`, home dir, git branch — before
+  attaching. Opt out in `~/.config/work/config.toml`:
+  ```toml
+  show_banner = false
+  ```
+- **`$WORK`.** Each container exports `WORK=<ws>` (and `WORKSPACE=<ws>`), so any
+  prompt or tool can name the workspace.
+- **Default prompt.** With no `--import-shell-config`, the default shell (zsh) gets
+  a minimal prompt that shows the workspace: `⬡ acme ~/proj %#`. Import your own rc
+  and it wins verbatim. (A bash workspace keeps Debian's default `~/.bashrc`.)
+- **Workspace-named session.** The in-container tmux session is named after the
+  workspace (`tmux ls` shows `acme`, not `work`), the window is named `<ws>`, and
+  the terminal tab is titled `work:<ws>`. Existing `work`-named sessions are renamed
+  in place (lossless — running shells/agents survive) on the next attach.
+
+### The `[Docker]` marker (Starship)
+
+If you import a shell config that runs [Starship](https://starship.rs), its
+`container` module renders a fixed `[Docker]` label — it is Starship detecting
+`/.dockerenv`, not `work` or OrbStack, and `work` won't edit your prompt config.
+Two opt-ins in `~/.config/starship.toml`:
+
+```toml
+# 1) Drop the now-redundant engine label:
+[container]
+disabled = true
+
+# 2) …or show the workspace name instead, via a custom module:
+[custom.work]
+command = "echo $WORK"
+when = """ test -n "$WORK" """
+format = '[$output]($style) '
+style = 'bold magenta'
+```
+
 ## Custom images (your tools, baked in)
 
 Want every workspace to start with your full toolchain instead of importing it
