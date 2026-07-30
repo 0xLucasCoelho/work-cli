@@ -45,6 +45,8 @@ pub struct RunOpts {
     pub volume_target: String, // "/home/dev"
     pub workdir: String,
     pub cmd: Vec<String>, // e.g. ["sleep", "infinity"]
+    /// Extra environment (`-e KEY=VALUE`). Identity metadata only.
+    pub env: Vec<(String, String)>,
 }
 
 /// The only thing that talks to a container runtime.
@@ -305,8 +307,11 @@ impl Engine for DockerCli {
             &mount,
             "-w",
             &opts.workdir,
-            &opts.image,
         ]);
+        for (k, v) in &opts.env {
+            c.arg("-e").arg(format!("{k}={v}"));
+        }
+        c.arg(&opts.image);
         for arg in &opts.cmd {
             c.arg(arg);
         }

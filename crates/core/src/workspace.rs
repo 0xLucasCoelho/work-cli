@@ -105,15 +105,7 @@ impl Workspace {
         if engine.container_exists(&ctr)? {
             engine.remove_container(&ctr)?;
         }
-        let opts = RunOpts {
-            name: ctr.clone(),
-            image: image.clone(),
-            network: net.clone(),
-            volume: vol.clone(),
-            volume_target: "/home/dev".into(),
-            workdir: "/home/dev".into(),
-            cmd: vec!["sleep".into(), "infinity".into()],
-        };
+        let opts = run_opts(name, &image);
         engine.run(&opts)?;
 
         // Seed validated configs (verbatim, warned) + suppress the shell's
@@ -144,15 +136,7 @@ impl Workspace {
         match self.engine.container_state(&ctr)? {
             ContainerState::Missing => {
                 // Recreate from config (e.g. container removed manually).
-                let opts = RunOpts {
-                    name: ctr.clone(),
-                    image: self.cfg.image.clone(),
-                    network: naming::network(&self.cfg.name),
-                    volume: naming::volume(&self.cfg.name),
-                    volume_target: "/home/dev".into(),
-                    workdir: "/home/dev".into(),
-                    cmd: vec!["sleep".into(), "infinity".into()],
-                };
+                let opts = run_opts(&self.cfg.name, &self.cfg.image);
                 self.engine.run(&opts)?;
             }
             ContainerState::Stopped => {
@@ -246,15 +230,7 @@ impl Workspace {
             self.engine.remove_container(&ctr)?;
         }
         ensure_image(&*self.engine, &self.cfg.image)?;
-        let opts = RunOpts {
-            name: ctr.clone(),
-            image: self.cfg.image.clone(),
-            network: naming::network(&self.cfg.name),
-            volume: naming::volume(&self.cfg.name),
-            volume_target: "/home/dev".into(),
-            workdir: "/home/dev".into(),
-            cmd: vec!["sleep".into(), "infinity".into()],
-        };
+        let opts = run_opts(&self.cfg.name, &self.cfg.image);
         self.engine.run(&opts)?;
         self.apply_git_identity()?;
         Ok(())
@@ -282,6 +258,24 @@ impl Workspace {
         }
         let _ = std::fs::remove_file(config::workspace_config_path(&self.cfg.name));
         Ok(())
+    }
+}
+
+/// `docker run` options for a workspace container. Sets the `WORK`/`WORKSPACE`
+/// identity env so prompts, banners, and tools can name the workspace.
+fn run_opts(name: &str, image: &str) -> RunOpts {
+    RunOpts {
+        name: naming::container(name),
+        image: image.to_string(),
+        network: naming::network(name),
+        volume: naming::volume(name),
+        volume_target: "/home/dev".into(),
+        workdir: "/home/dev".into(),
+        cmd: vec!["sleep".into(), "infinity".into()],
+        env: vec![
+            ("WORK".into(), name.into()),
+            ("WORKSPACE".into(), name.into()),
+        ],
     }
 }
 
@@ -489,4 +483,24 @@ fn ensure_rc_present(engine: &dyn Engine, ctr: &str, rcname: &str) -> Result<()>
 fn now_rfc3339() -> String {
     use chrono::Utc;
     Utc::now().to_rfc3339()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_opts_sets_identity_env_and_names() {
+        let opts = run_opts("acme", "work-base:latest");
+        assert_eq!(opts.name, "work-acme");
+        assert_eq!(opts.network, "work-net-acme");
+        assert_eq!(opts.volume, "work-acme-home");
+        assert_eq!(
+            opts.env,
+            vec![
+                ("WORK".to_string(), "acme".to_string()),
+                ("WORKSPACE".to_string(), "acme".to_string()),
+            ]
+        );
+    }
 }
