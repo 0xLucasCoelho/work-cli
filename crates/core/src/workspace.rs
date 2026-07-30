@@ -113,7 +113,8 @@ impl Workspace {
         for (src, dest, kind) in &seeds {
             seed_into(&*engine, &ctr, src, dest, kind, name)?;
         }
-        ensure_rc_present(&*engine, &ctr, rc)?;
+        let shell_imported = seeds.iter().any(|(_, _, kind)| *kind == "shell");
+        ensure_default_rc(&*engine, &ctr, rc, shell_imported)?;
 
         let cfg = WorkspaceConfig {
             name: name.to_string(),
@@ -528,15 +529,41 @@ fn seed_into(
     Ok(())
 }
 
-/// Ensure `/home/dev/<rcname>` exists so the shell's first-run prompt never
-/// fires (the named volume overlays the image's baked-in /home/dev). No-op if
-/// the rc is already present (e.g. it was just seeded, or persisted in the vol).
-fn ensure_rc_present(engine: &dyn Engine, ctr: &str, rcname: &str) -> Result<()> {
-    let path = format!("/home/dev/{rcname}");
-    if engine.exec_capture(ctr, &["test", "-e", &path]).is_err() {
-        // Create an empty rc as the dev user (the container's default exec user).
-        let _ = engine.exec_capture(ctr, &["touch", &path]);
+const ZSHRC_DEFAULT: &str = r#"# Default work prompt. Override: `work new --import-shell-config`.
+setopt PROMPT_SUBST
+PROMPT='%F{magenta}⬡%f %F{cyan}$WORK%f %F{blue}%~%f %# '
+"#;
+
+const BASHRC_DEFAULT: &str = r#"# Default work prompt. Override: `work new --import-shell-config`.
+PS1="\[\e[35m\]⬡\[\e[0m\] \[\e[36m\]${WORK}\[\e[0m\] \[\e[34m\]\w\[\e[0m\] $ "
+"#;
+
+/// Default rc body for the resolved shell.
+fn default_rc(rcname: &str) -> &'static str {
+    match rcname {
+        ".bashrc" => BASHRC_DEFAULT,
+        _ => ZSHRC_DEFAULT,
     }
+}
+
+/// Ensure `/home/dev/<rcname>` exists. If a shell config was imported it is
+/// already present (verbatim) — never overwrite. If nothing was imported and the
+/// rc is absent, write the minimal default rc with a workspace-aware prompt.
+fn ensure_default_rc(engine: &dyn Engine, ctr: &str, rcname: &str, imported: bool) -> Result<()> {
+    let path = format!("/home/dev/{rcname}");
+    if engine.exec_capture(ctr, &["test", "-e", &path]).is_ok() {
+        return Ok(()); // seeded or persisted — leave it alone.
+    }
+    if imported {
+        let _ = engine.exec_capture(ctr, &["touch", &path]);
+        return Ok(()); // import source was absent; keep empty rather than impose.
+    }
+    let dir = tempfile::tempdir().context("staging default rc")?;
+    let src = dir.path().join(rcname);
+    std::fs::write(&src, default_rc(rcname)).context("writing default rc")?;
+    engine
+        .seed_file(ctr, &src, &path)
+        .with_context(|| format!("seeding default {rcname}"))?;
     Ok(())
 }
 
@@ -562,5 +589,15 @@ mod tests {
                 ("WORKSPACE".to_string(), "acme".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn default_rc_is_workspace_aware() {
+        let z = default_rc(".zshrc");
+        assert!(z.contains("PROMPT"));
+        assert!(z.contains("$WORK"));
+        let b = default_rc(".bashrc");
+        assert!(b.contains("PS1"));
+        assert!(b.contains("WORK"));
     }
 }
