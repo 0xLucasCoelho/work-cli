@@ -61,10 +61,10 @@ Version comparison and release-JSON parsing — the foundation. No IO, fully tes
 
 In `crates/core/Cargo.toml`, append to the `[dependencies]` table (after the `chrono` line):
 ```toml
-ureq = { version = "2", default-features = false }
+ureq = { version = "2", default-features = false, features = ["tls"] }
 semver = "1"
 ```
-(`ureq` with `default-features = false` keeps it TLS-only via `rustls`; no OpenSSL system dep. `serde_json` and `chrono` are already present.)
+(`default-features = false` + `features = ["tls"]` keeps ureq on `rustls` TLS with no `native-tls`/OpenSSL system dep. `serde_json` and `chrono` are already present.)
 
 - [ ] **Step 2: Declare the module**
 
