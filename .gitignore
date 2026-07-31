@@ -3,3 +3,6 @@
 
 # Personal image recipes are local-only (not part of the OSS project).
 /Dockerfile.personal
+
+# Local git worktrees (e.g. .worktrees/feat-foo).
+/.worktrees/
