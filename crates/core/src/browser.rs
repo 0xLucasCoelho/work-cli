@@ -164,10 +164,19 @@ mod tests {
 
     #[test]
     fn callback_port_none_when_not_loopback_or_absent() {
-        assert_eq!(callback_port("https://p/a?redirect_uri=https://example.com/cb"), None);
-        assert_eq!(callback_port("https://p/a?redirect_uri=http://example.com:8080/cb"), None);
+        assert_eq!(
+            callback_port("https://p/a?redirect_uri=https://example.com/cb"),
+            None
+        );
+        assert_eq!(
+            callback_port("https://p/a?redirect_uri=http://example.com:8080/cb"),
+            None
+        );
         assert_eq!(callback_port("https://p/a"), None);
-        assert_eq!(callback_port("https://p/a?redirect_uri=http://localhost/cb"), None);
+        assert_eq!(
+            callback_port("https://p/a?redirect_uri=http://localhost/cb"),
+            None
+        );
         assert_eq!(callback_port("not a url"), None);
     }
 }

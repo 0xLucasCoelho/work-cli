@@ -573,8 +573,19 @@ impl Engine for DockerCli {
         let _child = self
             .cmd()
             .args([
-                "run", "--rm", "--name", name, "--network", network, "--entrypoint", "socat",
-                "-p", &publish, "alpine/socat", &listen, &connect,
+                "run",
+                "--rm",
+                "--name",
+                name,
+                "--network",
+                network,
+                "--entrypoint",
+                "socat",
+                "-p",
+                &publish,
+                "alpine/socat",
+                &listen,
+                &connect,
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())

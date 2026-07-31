@@ -472,7 +472,15 @@ pub fn browse(name: &str) -> Result<()> {
     let opener = crate::browser::host_opener();
     let mut bridged: HashSet<u16> = HashSet::new();
     let mut fwd_names: Vec<String> = Vec::new();
-    let result = browse_loop(engine, &ctr, &net, name, &opener, &mut bridged, &mut fwd_names);
+    let result = browse_loop(
+        engine,
+        &ctr,
+        &net,
+        name,
+        &opener,
+        &mut bridged,
+        &mut fwd_names,
+    );
     // Cleanup forwarders on normal/error exit. Ctrl-C is handled by the process
     // group receiving SIGINT -> each `docker run --rm` forwarder stops + removes.
     for fwd in &fwd_names {
