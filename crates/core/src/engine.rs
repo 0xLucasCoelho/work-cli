@@ -74,6 +74,11 @@ pub trait Engine: Send + Sync {
     fn exec_interactive(&self, name: &str, cmd: &[&str]) -> Result<()>;
     /// Non-interactive exec — captures stdout.
     fn exec_capture(&self, name: &str, cmd: &[&str]) -> Result<String>;
+    /// `docker exec --user root <name> <cmd...>` (non-interactive), require
+    /// success. For one-off system setup the `dev` user can't perform (e.g.
+    /// installing a shim under `/usr/local/bin`). Mirrors the `--user root`
+    /// pattern in seed_file/seed_dir, but as a general exec.
+    fn exec_root(&self, name: &str, cmd: &[&str]) -> Result<()>;
     /// True iff container `name` has a tmux server with `session`. Returns
     /// `false` (NOT an error) when the container is missing/stopped or the
     /// session is absent — so `ls`/`stop`/`rm` never choke on a downed box.
@@ -367,6 +372,21 @@ impl Engine for DockerCli {
             );
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+    fn exec_root(&self, name: &str, cmd: &[&str]) -> Result<()> {
+        let out = self
+            .cmd()
+            .args(["exec", "--user", "root", name])
+            .args(cmd)
+            .output()
+            .with_context(|| format!("exec (root) into {name}"))?;
+        if !out.status.success() {
+            bail!(
+                "exec (root) into {name} failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(())
     }
     fn session_exists(&self, name: &str, session: &str) -> Result<bool> {
         // Any non-zero exit (container missing / not running / no session) -> false.
