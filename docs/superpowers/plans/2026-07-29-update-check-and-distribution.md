@@ -992,6 +992,7 @@ Append to `.github/workflows/release.yml` (after the `build` job, same indentati
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       - name: Commit formula
         run: |
+          mkdir -p tap/Formula
           cp out/Formula/work.rb tap/Formula/work.rb
           cd tap
           git config user.name "github-actions[bot]"
