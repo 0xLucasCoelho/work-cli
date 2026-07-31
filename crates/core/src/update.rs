@@ -140,6 +140,33 @@ fn is_stale(cache: Option<&Cache>, now: DateTime<Utc>) -> bool {
         },
     }
 }
+use std::time::Duration as StdDuration;
+
+/// Fetch the latest version (if any) and write it to the cache. The fetcher is
+/// injected so this is unit-testable without network. Swallows all errors.
+#[allow(dead_code)] // wired into the worker in a later task.
+fn refresh_cache(path: &Path, now: DateTime<Utc>, fetcher: impl Fn() -> Option<String>) {
+    if let Some(latest) = fetcher() {
+        let _ = write_cache_atomic(path, &latest, now);
+    }
+}
+
+/// Real fetcher: GET `releases/latest`, parse `tag_name`. 2s timeout, no auth.
+/// GitHub requires a `User-Agent`. Returns `None` on any failure.
+#[allow(dead_code)] // wired into the worker in a later task.
+fn fetch_latest() -> Option<String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(StdDuration::from_secs(2))
+        .build();
+    let resp = agent
+        .get(RELEASES_URL)
+        .set("User-Agent", "work-cli")
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .ok()?;
+    let body = resp.into_string().ok()?;
+    parse_latest_tag(&body)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +283,21 @@ mod tests {
     fn cache_path_lives_under_config_dir() {
         let p = cache_path();
         assert!(p.ends_with("update-check.json"));
+    }
+
+    #[test]
+    fn refresh_cache_writes_when_fetcher_succeeds() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("update-check.json");
+        refresh_cache(&path, Utc::now(), || Some("0.9.0".to_string()));
+        assert_eq!(read_cache(&path).unwrap().latest, "0.9.0");
+    }
+
+    #[test]
+    fn refresh_cache_no_write_when_fetcher_returns_none() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("update-check.json");
+        refresh_cache(&path, Utc::now(), || None);
+        assert!(read_cache(&path).is_none());
     }
 }
