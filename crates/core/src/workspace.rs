@@ -380,6 +380,7 @@ fn run_opts(name: &str, image: &str) -> RunOpts {
         env: vec![
             ("WORK".into(), name.into()),
             ("WORKSPACE".into(), name.into()),
+            ("BROWSER".into(), crate::browser::SHIM_DEST.into()),
         ],
     }
 }
@@ -665,6 +666,10 @@ mod tests {
             vec![
                 ("WORK".to_string(), "acme".to_string()),
                 ("WORKSPACE".to_string(), "acme".to_string()),
+                (
+                    "BROWSER".to_string(),
+                    "/usr/local/bin/xdg-open".to_string()
+                ),
             ]
         );
     }
