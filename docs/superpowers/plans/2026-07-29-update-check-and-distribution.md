@@ -81,8 +81,6 @@ Create `crates/core/src/update.rs`:
 //!
 //! Pure helpers here; IO (cache, HTTP, threads) is added in later tasks.
 
-use anyhow::Result;
-
 /// The version of `work`/`work-core` currently running (workspace version).
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
@@ -111,12 +109,6 @@ fn parse_latest_tag(json: &str) -> Option<String> {
     Some(strip_tag(tag).to_string())
 }
 
-// Result is imported for later tasks; keep it used to avoid a dead-code warning
-// during this task.
-#[allow(dead_code)]
-fn _use_result() -> Result<()> {
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -497,8 +489,9 @@ Expected: FAIL — `cannot find function read_cache`.
 
 - [ ] **Step 3: Add the cache logic**
 
-Insert into `crates/core/src/update.rs` (before `#[cfg(test)]`). (Remove the `_use_result` placeholder from Task 1 now that `Result` is genuinely used here.)
+Insert into `crates/core/src/update.rs` (before `#[cfg(test)]`). This task adds `use anyhow::Result;` (first use of `Result` in the module).
 ```rust
+use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -665,7 +658,6 @@ Tie it together: gate, read cache, print hint, spawn worker, bounded-join at exi
 Append to `crates/core/src/update.rs` (before `#[cfg(test)]`). `std::io::IsTerminal` is already used elsewhere; import it here:
 ```rust
 use std::io::IsTerminal;
-use std::process;
 use std::sync::mpsc;
 use std::thread;
 
@@ -739,18 +731,12 @@ pub fn run_check() -> UpdateGuard {
     }
 }
 
-// `process` is imported for future `work update` parity; keep it used here so
-// clippy doesn't flag it mid-task.
-#[allow(dead_code)]
-fn _touch_process() -> process::ExitCode {
-    process::ExitCode::SUCCESS
-}
 ```
 
 - [ ] **Step 2: Build + clippy**
 
 Run: `cargo clippy -p work-core --all-targets -- -D warnings`
-Expected: PASS (no warnings). If clippy flags the unused `process` import, drop the `_touch_process` stub and the `use std::process;` line.
+Expected: PASS (no warnings).
 
 - [ ] **Step 3: Add a focused test for `enabled_in_env` wiring via the pure gate**
 
