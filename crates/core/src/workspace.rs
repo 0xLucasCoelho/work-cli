@@ -1,5 +1,6 @@
 //! High-level workspace orchestration: composes engine + config + naming.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -451,30 +452,75 @@ pub fn forward(name: &str, port: u16) -> Result<()> {
 }
 
 /// `work browse <ws>`: forward URLs that in-container tools try to open
-/// (`xdg-open`/`$BROWSER`) to the host browser. Installs/refreshes the shim,
-/// ensures the volume FIFO exists, then blocks reading it — each `http(s)`
-/// URL is opened via the host browser opener. Ctrl-C stops it (the container
-/// is unaffected; the FIFO persists). Mirrors `work fwd`.
+/// (`xdg-open`/`$BROWSER`) to the host browser, and auto-bridge the OAuth
+/// loopback callback port so a login completes with one command. Installs/
+/// refreshes the shim, ensures the volume FIFO exists, then blocks reading it
+/// — each `http(s)` URL is opened via the host browser opener, and if it
+/// carries a loopback `redirect_uri` that port is bridged host→container.
+/// Ctrl-C stops it (the container is unaffected; the FIFO persists). Mirrors
+/// `work fwd`.
 pub fn browse(name: &str) -> Result<()> {
     let ws = Workspace::open(name)?;
     ws.ensure_running()?;
     let engine = ws.engine();
     let ctr = naming::container(name);
+    let net = naming::network(name);
     crate::browser::install_shim(engine, &ctr)?;
     crate::browser::ensure_fifo(engine, &ctr)?;
-    println!("Browsing for {name} — URLs tools open will launch in your host browser.");
+    println!("Browsing for {name} — login URLs also bridge their callback port to the host.");
     println!("(Ctrl-C to stop)");
     let opener = crate::browser::host_opener();
+    let mut bridged: HashSet<u16> = HashSet::new();
+    let mut fwd_names: Vec<String> = Vec::new();
+    let result = browse_loop(engine, &ctr, &net, name, &opener, &mut bridged, &mut fwd_names);
+    // Cleanup forwarders on normal/error exit. Ctrl-C is handled by the process
+    // group receiving SIGINT -> each `docker run --rm` forwarder stops + removes.
+    for fwd in &fwd_names {
+        let _ = engine.remove_container(fwd);
+    }
+    result
+}
+
+/// Read URLs from the bridge FIFO forever; for each, auto-bridge a loopback
+/// OAuth callback port (if any) then open the URL in the host browser.
+fn browse_loop(
+    engine: &dyn Engine,
+    ctr: &str,
+    net: &str,
+    ws: &str,
+    opener: &str,
+    bridged: &mut HashSet<u16>,
+    fwd_names: &mut Vec<String>,
+) -> Result<()> {
     loop {
-        let line = engine.exec_capture(&ctr, &["cat", crate::browser::FIFO_PATH])?;
+        let line = engine.exec_capture(ctr, &["cat", crate::browser::FIFO_PATH])?;
         let url = line.trim();
-        if crate::browser::is_openable_url(url) {
-            match Command::new(&opener).arg(url).status() {
-                Ok(_) => println!("↗ opened {url}"),
-                Err(e) => eprintln!("· could not open {url} via {opener} ({e})"),
+        if !crate::browser::is_openable_url(url) {
+            if !url.is_empty() {
+                eprintln!("· ignored non-http(s) target: {url}");
             }
-        } else if !url.is_empty() {
-            eprintln!("· ignored non-http(s) target: {url}");
+            continue;
+        }
+        if let Some(port) = crate::browser::callback_port(url) {
+            if bridged.insert(port) {
+                let fwd = format!("work-browse-{ws}-{port}");
+                match engine.spawn_forwarder(&fwd, net, port, ctr, port) {
+                    Ok(_) => {
+                        fwd_names.push(fwd);
+                        println!("· bridged callback port {port} (host 127.0.0.1:{port} -> {ws})");
+                    }
+                    Err(e) => {
+                        bridged.remove(&port);
+                        eprintln!(
+                            "· could not bridge callback port {port} ({e}); run `work fwd {ws} {port}` if needed"
+                        );
+                    }
+                }
+            }
+        }
+        match Command::new(opener).arg(url).status() {
+            Ok(_) => println!("↗ opened {url}"),
+            Err(e) => eprintln!("· could not open {url} via {opener} ({e})"),
         }
     }
 }
