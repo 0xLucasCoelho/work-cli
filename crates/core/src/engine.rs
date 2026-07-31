@@ -113,6 +113,19 @@ pub trait Engine: Send + Sync {
         target: &str,
         target_port: u16,
     ) -> Result<()>;
+    /// Like `run_forwarder` but non-blocking: spawn the bridge as a detached
+    /// child (in the caller's process group) and return immediately. Used by
+    /// `work browse` to auto-bridge OAuth callback ports without blocking its
+    /// read loop. Cleanup is via Ctrl-C (process-group SIGINT -> `--rm`) or an
+    /// explicit `remove_container`.
+    fn spawn_forwarder(
+        &self,
+        name: &str,
+        network: &str,
+        host_port: u16,
+        target: &str,
+        target_port: u16,
+    ) -> Result<()>;
 }
 
 // ---------- PURE selection ----------
@@ -544,6 +557,32 @@ impl Engine for DockerCli {
         if !status.success() && status.code() != Some(130) {
             bail!("port forwarder exited with {:?}", status.code());
         }
+        Ok(())
+    }
+    fn spawn_forwarder(
+        &self,
+        name: &str,
+        network: &str,
+        host_port: u16,
+        target: &str,
+        target_port: u16,
+    ) -> Result<()> {
+        let publish = format!("127.0.0.1:{host_port}:{host_port}");
+        let listen = format!("TCP-LISTEN:{host_port},fork,reuseaddr");
+        let connect = format!("TCP:{target}:{target_port}");
+        let _child = self
+            .cmd()
+            .args([
+                "run", "--rm", "--name", name, "--network", network, "--entrypoint", "socat",
+                "-p", &publish, "alpine/socat", &listen, &connect,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("spawning forwarder {name}"))?;
+        // Handle dropped on purpose: the forwarder runs in our process group, so
+        // Ctrl-C stops it (`--rm` removes it); explicit cleanup is by name.
         Ok(())
     }
 }
