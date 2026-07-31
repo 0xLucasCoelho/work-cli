@@ -126,4 +126,17 @@ mod tests {
         assert!(PERSONAL_TEMPLATE.contains("work image build"));
         assert!(PERSONAL_TEMPLATE.contains("musl"));
     }
+
+    #[test]
+    fn default_dockerfile_bakes_terminal_and_locale() {
+        use super::DEFAULT_DOCKERFILE;
+        // Terminfo (xterm-256color / tmux-256color) + a UTF-8 locale + a sane
+        // default TERM must be baked in: `docker exec` does not propagate the
+        // host environment, so without these TUI agents and nested tmux render
+        // escape codes as literal text.
+        assert!(DEFAULT_DOCKERFILE.contains("ncurses-term"));
+        assert!(DEFAULT_DOCKERFILE.contains("locales"));
+        assert!(DEFAULT_DOCKERFILE.contains("TERM=xterm-256color"));
+        assert!(DEFAULT_DOCKERFILE.contains("LANG=C.UTF-8"));
+    }
 }

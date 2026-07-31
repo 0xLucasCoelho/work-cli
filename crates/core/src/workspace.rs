@@ -159,6 +159,8 @@ impl Workspace {
         }
         let shell_imported = seeds.iter().any(|(_, _, kind)| *kind == "shell");
         ensure_default_rc(&*engine, &ctr, rc, shell_imported)?;
+        let tmux_imported = seeds.iter().any(|(_, _, kind)| *kind == "tmux");
+        ensure_default_tmux_conf(&*engine, &ctr, tmux_imported)?;
 
         let cfg = WorkspaceConfig {
             name: name.to_string(),
@@ -611,6 +613,38 @@ fn ensure_default_rc(engine: &dyn Engine, ctr: &str, rcname: &str, imported: boo
     Ok(())
 }
 
+const TMUX_CONF_DEFAULT: &str = r#"# Default work tmux config. Override: `work new --import-tmux-config`.
+# 256-color terminal + truecolor passthrough so TUI agents (omp, Claude Code)
+# render correctly instead of falling back to the 8-color `screen` default.
+set -g default-terminal "tmux-256color"
+set -ga terminal-overrides ",*256col*:Tc"
+# Vim/agent friendly: don't delay Esc.
+set -sg escape-time 10
+"#;
+
+/// Ensure `/home/dev/.tmux.conf` exists. If a tmux config was imported (or a
+/// dotfiles tree provided one) it is already present — never overwrite. If
+/// nothing was imported and the file is absent, write a minimal default that
+/// enables 256-color + truecolor so TUI agents render correctly inside the
+/// in-container tmux session.
+fn ensure_default_tmux_conf(engine: &dyn Engine, ctr: &str, imported: bool) -> Result<()> {
+    let path = "/home/dev/.tmux.conf";
+    if engine.exec_capture(ctr, &["test", "-e", path]).is_ok() {
+        return Ok(()); // seeded or persisted — leave it alone.
+    }
+    if imported {
+        let _ = engine.exec_capture(ctr, &["touch", path]);
+        return Ok(()); // import source was absent; keep empty rather than impose.
+    }
+    let dir = tempfile::tempdir().context("staging default tmux.conf")?;
+    let src = dir.path().join(".tmux.conf");
+    std::fs::write(&src, TMUX_CONF_DEFAULT).context("writing default tmux.conf")?;
+    engine
+        .seed_file(ctr, &src, path)
+        .context("seeding default .tmux.conf")?;
+    Ok(())
+}
+
 fn now_rfc3339() -> String {
     use chrono::Utc;
     Utc::now().to_rfc3339()
@@ -643,5 +677,13 @@ mod tests {
         let b = default_rc(".bashrc");
         assert!(b.contains("PS1"));
         assert!(b.contains("WORK"));
+    }
+
+    #[test]
+    fn default_tmux_conf_enables_truecolor() {
+        // Must advertise a 256-color tmux terminal and pass truecolor through,
+        // so TUI agents render correctly instead of the 8-color `screen` default.
+        assert!(TMUX_CONF_DEFAULT.contains("tmux-256color"));
+        assert!(TMUX_CONF_DEFAULT.contains("Tc"));
     }
 }

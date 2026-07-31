@@ -75,4 +75,12 @@ The first public release. Not yet tagged — see
 ### Changed
 - Container-engine-agnostic: auto-detect OrbStack → Docker → Podman → Colima.
 
+### Fixed
+- Default workspace containers render TUI agents (omp, Claude Code, …) and
+  nested tmux correctly. The base image now ships `ncurses-term` (terminfo for
+  `xterm-256color`/`tmux-256color`) + a UTF-8 locale and bakes `TERM`/`LANG`/
+  `LC_ALL`, since `docker exec` does not propagate the host environment; a
+  minimal default `.tmux.conf` enables 256-color + truecolor when no tmux config
+  is imported.
+
 [Unreleased]: https://github.com/coelhucas-dev/work-cli/commits/main
