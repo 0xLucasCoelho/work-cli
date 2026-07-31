@@ -36,6 +36,46 @@ fn parse_latest_tag(json: &str) -> Option<String> {
     Some(strip_tag(tag).to_string())
 }
 
+use std::path::Path;
+
+/// How `work` appears to have been installed, inferred from its binary path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    Homebrew,
+    Cargo,
+    Other,
+}
+
+/// Detect the install channel from the running binary's path. Heuristic only;
+/// a binary copied out of its Cellar falls back to `Other`. PURE.
+pub fn detect_channel(exe: &Path) -> Channel {
+    let s = exe.to_string_lossy();
+    if s.contains("Cellar") {
+        Channel::Homebrew
+    } else if s.contains(".cargo") {
+        Channel::Cargo
+    } else {
+        Channel::Other
+    }
+}
+
+impl Channel {
+    /// One-line, user-facing upgrade hint for `latest`, tailored to the channel.
+    pub fn hint(&self, latest: &str) -> String {
+        match self {
+            Channel::Homebrew => {
+                format!("work {latest} available — run \"brew upgrade work\"")
+            }
+            Channel::Cargo => format!(
+                "work {latest} available — run \"cargo install --git https://github.com/coelhucas-dev/work-cli\""
+            ),
+            Channel::Other => format!(
+                "work {latest} available — see https://github.com/coelhucas-dev/work-cli/releases"
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,5 +111,37 @@ mod tests {
     fn current_is_a_version() {
         // CARGO_PKG_VERSION is always valid semver in this workspace.
         assert!(semver::Version::parse(CURRENT).is_ok());
+    }
+
+    use std::path::Path;
+
+    #[test]
+    fn detect_channel_from_path() {
+        assert_eq!(
+            detect_channel(Path::new("/opt/homebrew/Cellar/work/0.2.0/bin/work")),
+            Channel::Homebrew
+        );
+        assert_eq!(
+            detect_channel(Path::new("/usr/local/Cellar/work/0.2.0/bin/work")),
+            Channel::Homebrew
+        );
+        assert_eq!(
+            detect_channel(Path::new("/Users/jane/.cargo/bin/work")),
+            Channel::Cargo
+        );
+        assert_eq!(
+            detect_channel(Path::new("/usr/local/bin/work")),
+            Channel::Other
+        );
+    }
+
+    #[test]
+    fn channel_hint_is_channel_aware() {
+        assert_eq!(
+            Channel::Homebrew.hint("0.2.0"),
+            "work 0.2.0 available — run \"brew upgrade work\""
+        );
+        assert!(Channel::Cargo.hint("0.2.0").contains("cargo install --git"));
+        assert!(Channel::Other.hint("0.2.0").contains("releases"));
     }
 }
