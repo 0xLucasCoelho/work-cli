@@ -20,7 +20,7 @@ The first public release. Not yet tagged — see
 - `work rm <ws> [--purge]` — remove container + network + config; **keeps the
   volume by default**, `--purge` deletes it (irreversible; needs `--yes`).
 - `work fwd <ws> <port>` — opt-in host→workspace port bridge for your own logins.
-- `work browse <ws>` — forward URLs that in-container tools open (`xdg-open`/`$BROWSER`) to your host browser, so OAuth/subscription logins (Claude Code, Cursor CLI, …) complete without leaving the terminal.
+- `work browse <ws>` — forward URLs that in-container tools open (`xdg-open`/`$BROWSER`) to your host browser, so OAuth/subscription logins (Claude Code, Cursor CLI, …) complete without leaving the terminal. Also auto-bridges the OAuth `localhost:<port>` callback into the workspace, so a login completes with one command (no separate `work fwd`).
 - `work config <ws> [--edit]` — show/edit non-secret workspace metadata.
 - `work doctor` — isolation + engine sanity check (unique network per workspace,
   only its own volume mounted, non-root, no host ports, image match).

@@ -256,8 +256,12 @@ opens each URL via `open` (macOS) / `xdg-open` (Linux). Override the host
 opener with `WORK_HOST_BROWSER=<bin>`. Existing workspaces get the shim on
 first `work browse` — no image rebuild.
 
-Some logins additionally need a callback to `localhost:<port>`. For those,
-`work` offers an **opt-in, manual** port bridge alongside `work browse`:
+For logins that call back to `localhost:<port>` (most OAuth), `work browse`
+also **auto-bridges that port** from the host into the workspace — so a login
+completes with one command, no separate `work fwd`.
+
+For a callback port that isn't auto-bridged, or any other host→workspace port,
+`work` also offers an **opt-in, manual** port bridge:
 
 ```bash
 work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
