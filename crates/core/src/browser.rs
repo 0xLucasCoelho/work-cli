@@ -4,6 +4,7 @@
 //! validated by the `work browse` smoke test.
 
 use anyhow::{bail, Context, Result};
+use url::{Host, Url};
 
 use crate::engine::Engine;
 
@@ -59,6 +60,28 @@ pub fn host_opener() -> String {
 pub fn is_openable_url(s: &str) -> bool {
     let s = s.trim();
     s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// If `raw_url` is a login URL carrying a loopback `redirect_uri` (RFC 8252),
+/// return the callback port to bridge so the host browser's redirect reaches
+/// the in-container listener. `None` for non-loopback / absent / no-port. PURE.
+pub fn callback_port(raw_url: &str) -> Option<u16> {
+    let url = Url::parse(raw_url).ok()?;
+    let redirect = url
+        .query_pairs()
+        .find(|(k, _)| k == "redirect_uri")
+        .map(|(_, v)| v.into_owned())?;
+    let r = Url::parse(&redirect).ok()?;
+    if r.scheme() != "http" {
+        return None;
+    }
+    let loopback = matches!(r.host(), Some(Host::Ipv4(ip)) if ip.is_loopback())
+        || matches!(r.host(), Some(Host::Ipv6(ip)) if ip.is_loopback())
+        || matches!(r.host(), Some(Host::Domain(d)) if d == "localhost");
+    if !loopback {
+        return None;
+    }
+    r.port()
 }
 
 /// Idempotently install the shim + symlinks + profile.d export as root. Runs
@@ -123,5 +146,28 @@ mod tests {
         assert!(!is_openable_url("not a url"));
         // tolerates surrounding whitespace (docker exec capture can pad)
         assert!(is_openable_url("  https://example.com  "));
+    }
+
+    #[test]
+    fn callback_port_from_login_url() {
+        let url = "https://provider.example/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback&code_challenge=y";
+        assert_eq!(callback_port(url), Some(8080));
+        assert_eq!(
+            callback_port("https://p/a?redirect_uri=http://127.0.0.1:9000/cb"),
+            Some(9000)
+        );
+        assert_eq!(
+            callback_port("https://p/a?redirect_uri=http://[::1]:7000/cb"),
+            Some(7000)
+        );
+    }
+
+    #[test]
+    fn callback_port_none_when_not_loopback_or_absent() {
+        assert_eq!(callback_port("https://p/a?redirect_uri=https://example.com/cb"), None);
+        assert_eq!(callback_port("https://p/a?redirect_uri=http://example.com:8080/cb"), None);
+        assert_eq!(callback_port("https://p/a"), None);
+        assert_eq!(callback_port("https://p/a?redirect_uri=http://localhost/cb"), None);
+        assert_eq!(callback_port("not a url"), None);
     }
 }
