@@ -76,6 +76,19 @@ enum Command {
         /// Port to bridge (used on both host and container).
         port: u16,
     },
+    /// Forward URLs that in-container tools open (`xdg-open`/`$BROWSER`) to your
+    /// host browser — for OAuth/subscription logins (Claude Code, Cursor CLI, …).
+    ///
+    /// Installs an `xdg-open` shim in the workspace that sends each http(s) URL
+    /// to a volume FIFO; this command reads it and opens each URL in your real
+    /// browser. Ctrl-C stops it (the container keeps running).
+    ///
+    /// Example:
+    ///   work browse acme
+    Browse {
+        /// Workspace whose browser-open requests to forward.
+        ws: String,
+    },
     /// Show a workspace's (non-secret) config; use --edit to open it in $EDITOR.
     ///
     /// On --edit: re-validates the file, re-applies git identity, and recreates
@@ -145,6 +158,7 @@ enum ImageCmd {
 const RESERVED: &[&str] = &[
     "new",
     "all",
+    "browse",
     "ls",
     "start",
     "stop",
@@ -222,6 +236,7 @@ fn main() -> Result<ExitCode> {
         Some(Command::StopAll) => commands::stop_all(cli.yes)?,
         Some(Command::Resume) | Some(Command::All) => commands::resume()?,
         Some(Command::Fwd { ws, port }) => commands::fwd(&ws, port)?,
+        Some(Command::Browse { ws }) => commands::browse(&ws)?,
         Some(Command::Config { ws, edit }) => {
             if edit {
                 commands::config_edit(&ws, cli.yes)?;

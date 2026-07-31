@@ -270,6 +270,12 @@ pub fn fwd(ws: &str, port: u16) -> Result<()> {
     workspace::forward(ws, port)
 }
 
+/// `work browse <ws>`: forward URLs tools open inside the container to the
+/// host browser (for OAuth/subscription logins). Ctrl-C stops.
+pub fn browse(ws: &str) -> Result<()> {
+    workspace::browse(ws)
+}
+
 /// Apply the destructive-op safety policy. Prompts only when stdin is a TTY;
 /// `--yes` skips; non-interactive + no `--yes` refuses with a clear error.
 fn confirm(
