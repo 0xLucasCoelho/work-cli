@@ -27,7 +27,27 @@ terminal: attach to a persistent session, or tile all live sessions in a cockpit
 
 ## Install
 
-From source (for now; Homebrew tap + release binaries are planned):
+**Homebrew (recommended, macOS):**
+
+```bash
+brew install coelhucas-dev/tap/work
+```
+
+Upgrade with `brew upgrade work`.
+
+**One-line script (macOS + Linux):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coelhucas-dev/work-cli/main/install.sh | sh
+```
+
+**cargo-binstall** (if you have a Rust toolchain):
+
+```bash
+cargo binstall --git https://github.com/coelhucas-dev/work-cli work
+```
+
+**From source** (developers):
 
 ```bash
 cargo install --git https://github.com/coelhucas-dev/work-cli
@@ -41,6 +61,21 @@ Verify:
 work --version
 work doctor     # engine sanity + isolation check (no workspaces yet)
 ```
+
+## Upgrade
+
+`work` checks for a new release once a day and prints a one-line hint (to stderr,
+so it never interferes with scripting). The hint matches how you installed it
+(`brew upgrade work`, `cargo install --git …`, or a link to Releases). To disable
+the check, set in `~/.config/work/config.toml`:
+
+```toml
+[update]
+check = false
+```
+
+…or export `WORK_NO_UPDATE_CHECK=1`. The check is automatically off in CI and
+when output isn't a terminal.
 
 ## Quickstart
 

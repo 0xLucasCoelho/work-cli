@@ -61,6 +61,13 @@ The first public release. Not yet tagged — see
 - `Dockerfile.personal` (the `work-lucas` image) bakes claude, codex, omp, Antigravity
   (`agy`), and nvim alongside the existing CLI tools.
 
+### Added — distribution & update awareness
+- Homebrew tap: `brew install coelhucas-dev/tap/work` (bottles from release
+  assets); `cargo binstall` and a `curl | sh` installer as fallbacks.
+- Non-intrusive update-available check: once a day, prints a channel-aware
+  one-line hint to stderr. Opt out with `[update] check = false` or
+  `WORK_NO_UPDATE_CHECK=1`; off in CI / non-TTY.
+
 ### Security
 - Cross-context isolation enforced at the container/network/volume boundary;
   `work doctor` verifies it. `work` never reads, writes, or moves secrets.
