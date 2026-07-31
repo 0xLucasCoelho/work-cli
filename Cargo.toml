@@ -18,6 +18,7 @@ toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 dirs = "5"
 tempfile = "3"
+url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 include_dir = "0.7"
 work-core = { path = "crates/core" }

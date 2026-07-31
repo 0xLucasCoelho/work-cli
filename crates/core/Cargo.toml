@@ -13,6 +13,7 @@ dirs.workspace = true
 tempfile.workspace = true
 chrono.workspace = true
 include_dir.workspace = true
+url.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls"] }
 semver = "1"
 
