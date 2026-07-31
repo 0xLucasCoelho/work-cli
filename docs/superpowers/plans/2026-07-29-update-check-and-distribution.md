@@ -811,12 +811,13 @@ Let `cargo binstall --git … work` fetch a pre-built binary from the release as
 
 - [ ] **Step 1: Add binstall metadata**
 
-Append to `crates/cli/Cargo.toml`:
+Append to `crates/cli/Cargo.toml`. First add `repository.workspace = true` to the `[package]` table — the `{ repo }` template below resolves from the package's `repository` field, which the workspace already defines as the GitHub URL. Then append the binstall metadata block:
 ```toml
 [package.metadata.binstall]
 # Reuses the binaries published by .github/workflows/release.yml.
+# bin-dir matches the release archive layout: the `work` binary is at the archive root.
 pkg-url = "{ repo }/releases/download/v{ version }/work-{ target }.tar.gz"
-bin-dir = "work-{ bin }{ binary-ext }"
+bin-dir = "{ bin }{ binary-ext }"
 ```
 
 - [ ] **Step 2: Verify it parses**
