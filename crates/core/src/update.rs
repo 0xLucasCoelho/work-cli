@@ -83,6 +83,63 @@ pub fn is_enabled(is_tty: bool, ci_set: bool, check_cfg: bool, no_update_env_set
     is_tty && !ci_set && check_cfg && !no_update_env_set
 }
 
+use anyhow::Result;
+use std::fs;
+use std::path::PathBuf;
+
+use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::config;
+
+/// Daily cache backing the update check. Transient runtime state — kept out of
+/// the user-edited `config.toml`.
+#[allow(dead_code)]
+#[derive(Serialize, Deserialize)]
+struct Cache {
+    last_check: String, // RFC3339
+    latest: String,
+}
+
+/// Where the cache file lives: `~/.config/work/update-check.json`.
+#[allow(dead_code)]
+fn cache_path() -> PathBuf {
+    config::config_dir().join("update-check.json")
+}
+
+#[allow(dead_code)]
+fn read_cache(path: &Path) -> Option<Cache> {
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Write the cache atomically (tmp + rename) so a process killed mid-write
+/// never leaves a corrupt file.
+#[allow(dead_code)]
+fn write_cache_atomic(path: &Path, latest: &str, now: DateTime<Utc>) -> Result<()> {
+    let cache = Cache {
+        last_check: now.to_rfc3339(),
+        latest: latest.to_string(),
+    };
+    let raw = serde_json::to_string(&cache)?;
+    let tmp = path.with_file_name("update-check.json.tmp");
+    fs::write(&tmp, raw)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// True if the cache is missing or older than 24h (or unparseable). PURE-ish:
+/// pure given `now`.
+#[allow(dead_code)]
+fn is_stale(cache: Option<&Cache>, now: DateTime<Utc>) -> bool {
+    match cache {
+        None => true,
+        Some(c) => match DateTime::parse_from_rfc3339(&c.last_check) {
+            Ok(t) => now - t.with_timezone(&Utc) > Duration::hours(24),
+            Err(_) => true,
+        },
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +218,43 @@ mod tests {
         );
         assert!(Channel::Cargo.hint("0.2.0").contains("cargo install --git"));
         assert!(Channel::Other.hint("0.2.0").contains("releases"));
+    }
+    use chrono::{TimeZone, Utc};
+    use tempfile::tempdir;
+
+    #[test]
+    fn cache_round_trip_and_read_missing() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("update-check.json");
+        assert!(read_cache(&path).is_none());
+        let now = Utc::now();
+        write_cache_atomic(&path, "0.5.0", now).unwrap();
+        let c = read_cache(&path).unwrap();
+        assert_eq!(c.latest, "0.5.0");
+    }
+
+    #[test]
+    fn is_stale_when_missing_or_old() {
+        let now = Utc::now();
+        assert!(is_stale(None, now));
+        let fresh = Cache {
+            last_check: now.to_rfc3339(),
+            latest: "0.1.0".to_string(),
+        };
+        assert!(!is_stale(Some(&fresh), now));
+        let old = Cache {
+            last_check: Utc
+                .timestamp_opt(now.timestamp() - 25 * 3600, 0)
+                .unwrap()
+                .to_rfc3339(),
+            latest: "0.1.0".to_string(),
+        };
+        assert!(is_stale(Some(&old), now));
+    }
+
+    #[test]
+    fn cache_path_lives_under_config_dir() {
+        let p = cache_path();
+        assert!(p.ends_with("update-check.json"));
     }
 }
