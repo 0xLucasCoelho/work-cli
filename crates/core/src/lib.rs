@@ -12,4 +12,5 @@ pub mod image;
 pub mod naming;
 pub mod safety;
 pub mod templates;
+pub mod update;
 pub mod workspace;

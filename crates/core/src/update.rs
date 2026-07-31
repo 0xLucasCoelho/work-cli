@@ -1,0 +1,75 @@
+//! Update-available awareness: best-effort, daily-cached, non-blocking.
+//!
+//! Pure helpers here; IO (cache, HTTP, threads) is added in later tasks.
+
+/// The version of `work`/`work-core` currently running (workspace version).
+pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
+
+#[allow(dead_code)]
+const RELEASES_URL: &str = "https://api.github.com/repos/coelhucas-dev/work-cli/releases/latest";
+
+/// Strip a leading `v` from a release tag (`v0.2.0` -> `0.2.0`). PURE.
+#[allow(dead_code)]
+fn strip_tag(tag: &str) -> &str {
+    tag.strip_prefix('v').unwrap_or(tag)
+}
+
+/// True iff `latest` is a strictly newer semver than `current`. Any parse
+/// failure -> `false` (never claims an update we can't understand). PURE.
+#[allow(dead_code)]
+fn is_newer(latest: &str, current: &str) -> bool {
+    match (
+        semver::Version::parse(latest),
+        semver::Version::parse(current),
+    ) {
+        (Ok(l), Ok(c)) => l > c,
+        _ => false,
+    }
+}
+
+/// Extract the `tag_name` (v-stripped) from a GitHub `releases/latest` body.
+/// `None` on any shape we don't recognise. PURE.
+#[allow(dead_code)]
+fn parse_latest_tag(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let tag = v.get("tag_name")?.as_str()?;
+    Some(strip_tag(tag).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_tag_removes_leading_v() {
+        assert_eq!(strip_tag("v0.2.0"), "0.2.0");
+        assert_eq!(strip_tag("0.2.0"), "0.2.0");
+        assert_eq!(strip_tag(""), "");
+    }
+
+    #[test]
+    fn is_newer_compares_semver() {
+        assert!(is_newer("0.2.0", "0.1.0"));
+        assert!(!is_newer("0.1.0", "0.1.0"));
+        assert!(!is_newer("0.0.9", "0.1.0"));
+        // Pre-release is older than its release.
+        assert!(!is_newer("0.2.0-rc.1", "0.2.0"));
+        // Unparseable -> never claims newer.
+        assert!(!is_newer("not-a-version", "0.1.0"));
+        assert!(!is_newer("0.2.0", "not-a-version"));
+    }
+
+    #[test]
+    fn parse_latest_tag_reads_tag_name() {
+        let body = r#"{"tag_name":"v0.3.0","name":"0.3.0","html_url":"x"}"#;
+        assert_eq!(parse_latest_tag(body), Some("0.3.0".to_string()));
+        assert_eq!(parse_latest_tag("{}"), None);
+        assert_eq!(parse_latest_tag("not json"), None);
+    }
+
+    #[test]
+    fn current_is_a_version() {
+        // CARGO_PKG_VERSION is always valid semver in this workspace.
+        assert!(semver::Version::parse(CURRENT).is_ok());
+    }
+}
