@@ -699,10 +699,7 @@ mod tests {
             vec![
                 ("WORK".to_string(), "acme".to_string()),
                 ("WORKSPACE".to_string(), "acme".to_string()),
-                (
-                    "BROWSER".to_string(),
-                    "/usr/local/bin/xdg-open".to_string()
-                ),
+                ("BROWSER".to_string(), "/usr/local/bin/xdg-open".to_string()),
             ]
         );
     }

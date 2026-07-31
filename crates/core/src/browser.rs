@@ -92,7 +92,10 @@ pub fn ensure_fifo(engine: &dyn Engine, ctr: &str) -> Result<()> {
         ],
     )?;
     // Surface a clear error if the node isn't a FIFO after the attempt.
-    if engine.exec_capture(ctr, &["test", "-p", FIFO_PATH]).is_err() {
+    if engine
+        .exec_capture(ctr, &["test", "-p", FIFO_PATH])
+        .is_err()
+    {
         bail!("could not create browser FIFO {FIFO_PATH} in {ctr}");
     }
     Ok(())
