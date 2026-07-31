@@ -239,12 +239,27 @@ volume, runs as root, or publishes a host port).
 
 ## Logging into tools that need a browser (OAuth)
 
-Some CLIs complete login via a callback to `localhost:<port>`. `work` offers an
-**opt-in, manual** port bridge — it does not run or orchestrate the login, it
-just forwards a host port into the workspace when you ask:
+CLIs like Claude Code, Cursor, or `gh` open a browser URL to log in. Inside a
+container there's no browser, so `work` forwards those open-requests to your
+**host** browser.
 
 ```bash
-# In the workspace, start the login; then on the host:
+# In one terminal, start the bridge:
+work browse acme
+#   -> URLs that tools open inside `acme` now launch in your host browser.
+#      Ctrl-C stops it (the container keeps running).
+```
+
+It installs an `xdg-open` shim in the workspace (and sets `$BROWSER`) that
+sends each `http(s)` URL to a FIFO in the volume; `work browse` reads it and
+opens each URL via `open` (macOS) / `xdg-open` (Linux). Override the host
+opener with `WORK_HOST_BROWSER=<bin>`. Existing workspaces get the shim on
+first `work browse` — no image rebuild.
+
+Some logins additionally need a callback to `localhost:<port>`. For those,
+`work` offers an **opt-in, manual** port bridge alongside `work browse`:
+
+```bash
 work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 # Complete the login in your browser, then Ctrl-C to tear the bridge down.
 ```
@@ -262,6 +277,7 @@ work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 | `work rm <ws>` | Remove container + network + config, **keep** the volume. |
 | `work rm <ws> --purge` | Also delete the volume (irreversible). Needs `--yes`. |
 | `work fwd <ws> <port>` | (opt-in) forward a host port into a workspace for your own logins. |
+| `work browse <ws>` | Forward URLs tools open inside the workspace to your host browser (OAuth logins). Ctrl-C stops. |
 | `work config <ws>` | Show config. `--edit` opens it in `$EDITOR`. |
 | `work image build` | Build the default `work-base:latest`; `--tag`/`--dockerfile` for custom images. |
 | `work image init` | Scaffold a personal-image Dockerfile (extends `work-base`) to customize. |
