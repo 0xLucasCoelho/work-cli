@@ -4,6 +4,7 @@
 //! client over it.
 
 pub mod banner;
+pub mod browser;
 pub mod config;
 pub mod doctor;
 pub mod engine;
