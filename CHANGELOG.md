@@ -83,5 +83,8 @@ The first public release. Not yet tagged — see
   `LC_ALL`, since `docker exec` does not propagate the host environment; a
   minimal default `.tmux.conf` enables 256-color + truecolor when no tmux config
   is imported.
+- Forward the host's `COLORTERM` into workspace attach so TUI agents detect
+  truecolor (they were forced to ANSI/16-color because `docker exec` dropped it).
+  The default `.tmux.conf` also re-picks up `COLORTERM` on re-attach.
 
 [Unreleased]: https://github.com/coelhucas-dev/work-cli/commits/main

@@ -362,9 +362,19 @@ impl Engine for DockerCli {
     }
 
     fn exec_interactive(&self, name: &str, cmd: &[&str]) -> Result<()> {
-        let status = self
-            .cmd()
-            .args(["exec", "-it", "-w", "/home/dev", name])
+        let mut c = self.cmd();
+        c.arg("exec");
+        // Forward the host's terminal-color capability so TUI apps inside the
+        // container (Claude Code, omp, …) detect the real color depth. `docker
+        // exec` does not propagate the host environment; without COLORTERM they
+        // can't see truecolor and degrade to a mode that renders incorrectly.
+        for var in TERMINAL_ENV_TO_FORWARD {
+            if let Ok(val) = std::env::var(var) {
+                c.arg("-e").arg(format!("{var}={val}"));
+            }
+        }
+        let status = c
+            .args(["-it", "-w", "/home/dev", name])
             .args(cmd)
             .status()?;
         if !status.success() {
@@ -617,4 +627,24 @@ pub fn build_image_at(
         bail!("image build for {tag} failed (exit {:?})", status.code());
     }
     Ok(())
+}
+
+/// Host terminal env forwarded into a workspace `exec` so in-container TUI apps
+/// (Claude Code, omp, …) detect the host's real color depth. `docker exec`
+/// does not propagate the host environment, and `COLORTERM` is the de-facto
+/// signal apps check for truecolor — without it they degrade below what the
+/// terminal can render. (TERM/TERM_PROGRAM are set by tmux itself, not us.)
+const TERMINAL_ENV_TO_FORWARD: &[&str] = &["COLORTERM"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_env_forward_list_advertises_truecolor() {
+        // COLORTERM is the de-facto signal apps (supports-color, etc.) check
+        // for truecolor; it must be forwarded or they degrade below the
+        // terminal's real capability.
+        assert!(TERMINAL_ENV_TO_FORWARD.contains(&"COLORTERM"));
+    }
 }
