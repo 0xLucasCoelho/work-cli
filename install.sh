@@ -29,7 +29,7 @@ install_dir="/usr/local/bin"
 if [ ! -w "$install_dir" ]; then
     install_dir="${CARGO_HOME:-$HOME/.cargo}/bin"
 fi
-if [ ! -d "$install_dir" ]; then
+if [ ! -w "$install_dir" ]; then
     install_dir="$HOME/.local/bin"
 fi
 mkdir -p "$install_dir"
@@ -38,7 +38,8 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 url="https://github.com/${REPO}/releases/download/${latest_tag}/${target}.tar.gz"
 echo "Downloading $url"
-curl -fsSL "$url" | tar -xz -C "$tmpdir"
+curl -fsSL "$url" -o "$tmpdir/pkg.tar.gz"
+tar -xzf "$tmpdir/pkg.tar.gz" -C "$tmpdir"
 
 cp "$tmpdir/$BIN_NAME" "$install_dir/$BIN_NAME"
 chmod +x "$install_dir/$BIN_NAME"
