@@ -76,9 +76,27 @@ impl Channel {
     }
 }
 
+/// Whether the update check should run, given the four enablement factors.
+/// PURE — callers gather the booleans from the environment/config. Enabled iff
+/// interactive (tty) AND not CI AND config on AND no env override.
+pub fn is_enabled(is_tty: bool, ci_set: bool, check_cfg: bool, no_update_env_set: bool) -> bool {
+    is_tty && !ci_set && check_cfg && !no_update_env_set
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_enabled_truth_table() {
+        // enabled: tty, no CI, config on, no env override.
+        assert!(is_enabled(true, false, true, false));
+        // disabled by each factor in turn.
+        assert!(!is_enabled(false, false, true, false)); // not a tty
+        assert!(!is_enabled(true, true, true, false)); // CI set
+        assert!(!is_enabled(true, false, false, false)); // config opt-out
+        assert!(!is_enabled(true, false, true, true)); // env opt-out
+    }
 
     #[test]
     fn strip_tag_removes_leading_v() {

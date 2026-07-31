@@ -29,6 +29,9 @@ pub struct GlobalConfig {
     /// Print the in-container identity banner on `work <ws>` attach (default on).
     #[serde(default = "default_show_banner")]
     pub show_banner: bool,
+    /// Update-available check preferences (default: enabled).
+    #[serde(default)]
+    pub update: UpdatePrefs,
 }
 
 fn default_image() -> Option<String> {
@@ -42,6 +45,24 @@ fn default_show_banner() -> bool {
 impl GlobalConfig {
     pub fn effective_default_image(&self) -> &str {
         self.default_image.as_deref().unwrap_or(DEFAULT_IMAGE)
+    }
+}
+
+/// Preferences for the update-available check.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdatePrefs {
+    /// Run the (best-effort, daily) update check. Default `true`.
+    #[serde(default = "default_check")]
+    pub check: bool,
+}
+
+fn default_check() -> bool {
+    true
+}
+
+impl Default for UpdatePrefs {
+    fn default() -> Self {
+        Self { check: true }
     }
 }
 
@@ -88,6 +109,7 @@ pub fn load_global() -> Result<GlobalConfig> {
             import_starship_config: None,
             import_dotfiles: None,
             show_banner: true,
+            update: UpdatePrefs::default(),
         });
     }
     let raw =
@@ -195,5 +217,34 @@ mod tests {
     fn missing_config_defaults_banner_on() {
         let parsed: GlobalConfig = toml::from_str("").unwrap();
         assert!(parsed.show_banner);
+    }
+
+    #[test]
+    fn update_prefs_default_check_is_true() {
+        assert!(UpdatePrefs::default().check);
+    }
+
+    #[test]
+    fn load_global_defaults_include_update_enabled() {
+        // config.toml absent -> defaults, with the update check on.
+        let dir = std::env::temp_dir();
+        // We assert the default struct directly (load_global reads a real path).
+        let _ = dir;
+        let g = GlobalConfig {
+            default_image: Some(DEFAULT_IMAGE.to_string()),
+            import_shell_config: None,
+            import_tmux_config: None,
+            import_starship_config: None,
+            import_dotfiles: None,
+            show_banner: true,
+            update: UpdatePrefs::default(),
+        };
+        assert!(g.update.check);
+    }
+
+    #[test]
+    fn update_prefs_parses_check_false() {
+        let g: GlobalConfig = toml::from_str("[update]\ncheck = false\n").unwrap();
+        assert!(!g.update.check);
     }
 }
