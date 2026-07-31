@@ -130,6 +130,10 @@ impl Workspace {
         }
         let opts = run_opts(name, &image);
         engine.run(&opts)?;
+        // Browser bridge shim: install early so a brand-new workspace can
+        // forward `xdg-open` calls. Idempotent; best-effort (warn, don't fail
+        // workspace creation over a convenience shim).
+        let _ = crate::browser::install_shim(&*engine, &ctr);
 
         // Seed the dotfiles tree first (explicit dir, or the author's embedded
         // templates via --use-author-default) so per-file imports below can still
@@ -444,6 +448,35 @@ pub fn forward(name: &str, port: u16) -> Result<()> {
     )?;
     println!("bridge stopped");
     Ok(())
+}
+
+/// `work browse <ws>`: forward URLs that in-container tools try to open
+/// (`xdg-open`/`$BROWSER`) to the host browser. Installs/refreshes the shim,
+/// ensures the volume FIFO exists, then blocks reading it — each `http(s)`
+/// URL is opened via the host browser opener. Ctrl-C stops it (the container
+/// is unaffected; the FIFO persists). Mirrors `work fwd`.
+pub fn browse(name: &str) -> Result<()> {
+    let ws = Workspace::open(name)?;
+    ws.ensure_running()?;
+    let engine = ws.engine();
+    let ctr = naming::container(name);
+    crate::browser::install_shim(engine, &ctr)?;
+    crate::browser::ensure_fifo(engine, &ctr)?;
+    println!("Browsing for {name} — URLs tools open will launch in your host browser.");
+    println!("(Ctrl-C to stop)");
+    let opener = crate::browser::host_opener();
+    loop {
+        let line = engine.exec_capture(&ctr, &["cat", crate::browser::FIFO_PATH])?;
+        let url = line.trim();
+        if crate::browser::is_openable_url(url) {
+            match Command::new(&opener).arg(url).status() {
+                Ok(_) => println!("↗ opened {url}"),
+                Err(e) => eprintln!("· could not open {url} via {opener} ({e})"),
+            }
+        } else if !url.is_empty() {
+            eprintln!("· ignored non-http(s) target: {url}");
+        }
+    }
 }
 
 /// `work resume` (= `work all`): host tmux cockpit tiling every RUNNING
