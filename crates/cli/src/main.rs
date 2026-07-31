@@ -189,6 +189,10 @@ fn main() -> Result<ExitCode> {
     // Normalize `work <cmd> help` -> `work help <cmd>` so the trailing-help form
     // works (clap only natively does `work help <cmd>` / `work <cmd> --help`).
     let raw = normalize_help_arg(raw);
+    // Best-effort update-available awareness (non-blocking, daily-cached).
+    // Held to end of main(); drops at exit -> bounded-joined (≤1s) so a stale
+    // cache refreshes for short-lived commands. Off in CI/non-TTY.
+    let _update_guard = work_core::update::run_check();
 
     // Bare workspace name dispatch: `work <ws>`.
     if let Some(first) = raw.first() {

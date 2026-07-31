@@ -144,7 +144,6 @@ use std::time::Duration as StdDuration;
 
 /// Fetch the latest version (if any) and write it to the cache. The fetcher is
 /// injected so this is unit-testable without network. Swallows all errors.
-#[allow(dead_code)] // wired into the worker in a later task.
 fn refresh_cache(path: &Path, now: DateTime<Utc>, fetcher: impl Fn() -> Option<String>) {
     if let Some(latest) = fetcher() {
         let _ = write_cache_atomic(path, &latest, now);
@@ -153,7 +152,6 @@ fn refresh_cache(path: &Path, now: DateTime<Utc>, fetcher: impl Fn() -> Option<S
 
 /// Real fetcher: GET `releases/latest`, parse `tag_name`. 2s timeout, no auth.
 /// GitHub requires a `User-Agent`. Returns `None` on any failure.
-#[allow(dead_code)] // wired into the worker in a later task.
 fn fetch_latest() -> Option<String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(StdDuration::from_secs(2))
@@ -167,6 +165,82 @@ fn fetch_latest() -> Option<String> {
     let body = resp.into_string().ok()?;
     parse_latest_tag(&body)
 }
+
+use std::io::IsTerminal;
+use std::sync::mpsc;
+use std::thread;
+
+/// Guard returned by `run_check`. Held for the life of the CLI; on drop it
+/// bounded-joins the worker (≤1s) so a stale cache actually refreshes for
+/// short-lived commands. Dropping never blocks longer than the budget.
+pub struct UpdateGuard {
+    done: Option<mpsc::Receiver<()>>,
+}
+
+impl UpdateGuard {
+    /// An inert guard that does nothing on drop (check disabled / cache fresh).
+    fn none() -> Self {
+        Self { done: None }
+    }
+}
+
+impl Drop for UpdateGuard {
+    fn drop(&mut self) {
+        if let Some(rx) = self.done.take() {
+            // Bounded: don't let a slow network delay exit beyond 1s. If the
+            // worker is still running, it is simply killed at process exit;
+            // the cache write is atomic, so nothing is corrupted.
+            let _ = rx.recv_timeout(StdDuration::from_secs(1));
+        }
+    }
+}
+
+/// Gather the four enablement factors from the live environment/config.
+fn enabled_in_env() -> bool {
+    let is_tty = std::io::stderr().is_terminal();
+    let ci_set = std::env::var_os("CI").is_some();
+    let no_update_env = std::env::var_os("WORK_NO_UPDATE_CHECK").is_some();
+    let check_cfg = config::load_global()
+        .map(|g| g.update.check)
+        .unwrap_or(true);
+    is_enabled(is_tty, ci_set, check_cfg, no_update_env)
+}
+
+/// Entry point for the CLI. Best-effort, non-blocking:
+///   1. If disabled, return an inert guard.
+///   2. Print a one-line, channel-aware hint if the cached `latest` is newer.
+///   3. If the cache is stale, spawn a worker that refreshes it; the returned
+///      guard bounded-joins it at exit.
+///
+/// Never panics, never errors into the caller.
+pub fn run_check() -> UpdateGuard {
+    if !enabled_in_env() {
+        return UpdateGuard::none();
+    }
+
+    let path = cache_path();
+    let now = Utc::now();
+    let cached = read_cache(&path);
+
+    if let Some(c) = cached.as_ref() {
+        if is_newer(&c.latest, CURRENT) {
+            let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("work"));
+            eprintln!("{}", detect_channel(&exe).hint(&c.latest));
+        }
+    }
+
+    if is_stale(cached.as_ref(), now) {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            refresh_cache(&path, now, fetch_latest);
+            let _ = tx.send(());
+        });
+        UpdateGuard { done: Some(rx) }
+    } else {
+        UpdateGuard::none()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +373,11 @@ mod tests {
         let path = dir.path().join("update-check.json");
         refresh_cache(&path, Utc::now(), || None);
         assert!(read_cache(&path).is_none());
+    }
+
+    #[test]
+    fn inert_guard_drops_cleanly() {
+        let g = UpdateGuard::none();
+        drop(g); // must not block or panic
     }
 }
