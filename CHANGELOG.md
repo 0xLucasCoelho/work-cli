@@ -57,7 +57,7 @@ The first public release. Not yet tagged — see
 ### Added — dotfiles & author default
 - `work new --import-dotfiles <dir>` recursively seeds a dotfiles tree into `/home/dev`
   (covers `.config/nvim`, `.config/atuin`, …); optional global `import_dotfiles`.
-- `work new --default` seeds the repo's bundled `personal/dotfiles` templates
+- `work new --default` seeds the repo's bundled `templates/` dotfiles
   (embedded in the binary at build) + the configured `default_image` — one-command setup.
 - `Dockerfile.personal` (the `work-lucas` image, **Ubuntu 24.04 LTS**) bakes
   claude, codex, omp, Antigravity (`agy`), and nvim alongside

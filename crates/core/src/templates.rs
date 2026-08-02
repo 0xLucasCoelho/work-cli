@@ -1,4 +1,4 @@
-//! Author-default dotfile templates, embedded at build from `personal/dotfiles`.
+//! Author-default dotfile templates, embedded at build from `templates/`.
 //! `--default` extracts these into a workspace so it comes up with the
 //! author's full shell/editor/agent config — no external path required.
 
@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use include_dir::{include_dir, Dir};
 use tempfile::TempDir;
 
-/// Bundled author-default dotfile tree. Source of truth: `personal/dotfiles`.
-pub static TEMPLATES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../personal/dotfiles");
+/// Bundled author-default dotfile tree. Source of truth: `templates/`.
+pub static TEMPLATES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../templates");
 
 /// Extract the embedded templates to a fresh tempdir. Keep the returned TempDir
 /// alive for as long as the extracted path is used (e.g. until after `seed_dir`).

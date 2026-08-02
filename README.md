@@ -139,7 +139,7 @@ work new acme --import-shell-config ~/my.zshrc # copies that file -> /home/dev/.
 work new acme --import-tmux-config             # copies ~/.tmux.conf -> /home/dev/.tmux.conf
 work new acme --import-starship-config          # copies ~/.config/starship.toml -> /home/dev/.config/starship.toml
 work new acme --import-dotfiles ~/dotfiles        # recursively copies that dir -> /home/dev
-work new acme --default                        # seed the repo's bundled personal/dotfiles templates
+work new acme --default                        # seed the repo's bundled templates/ dotfiles
 ```
 
 `work` prints a warning when it copies a config — **make sure it is secret-free**,
@@ -151,7 +151,7 @@ best-effort.
 `--import-dotfiles <dir>` copies an entire directory tree (e.g. your `.zshrc`,
 `.config/nvim`, `.config/atuin`) into `/home/dev` in one shot — useful for configs
 that aren't single files. `--default` does the same with the **bundled
-`personal/dotfiles` templates** (embedded in the binary at build) plus the configured
+`templates/` dotfiles** (embedded in the binary at build) plus the configured
 `default_image`, so `work new <ws> --default` reproduces the author's full
 setup. Both also read a global default (`import_dotfiles = "…"`). The same secret-free
 warning applies; explicit `--import-*` flags override individual files from a dotfiles seed.
