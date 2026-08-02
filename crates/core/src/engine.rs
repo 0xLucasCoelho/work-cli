@@ -364,14 +364,19 @@ impl Engine for DockerCli {
     fn exec_interactive(&self, name: &str, cmd: &[&str]) -> Result<()> {
         let mut c = self.cmd();
         c.arg("exec");
-        // Forward the host's terminal-color capability so TUI apps inside the
-        // container (Claude Code, omp, …) detect the real color depth. `docker
-        // exec` does not propagate the host environment; without COLORTERM they
-        // can't see truecolor and degrade to a mode that renders incorrectly.
+        // Forward terminal capabilities into the exec so TUI apps inside the
+        // container (Claude Code, omp, …) detect the host's real color depth
+        // and render Nerd Font glyphs. `docker exec` does not propagate the
+        // host environment: without COLORTERM apps degrade below truecolor,
+        // and without NERD_FONTS=1 agents like omp fall back to ASCII glyphs
+        // because they see TERM_PROGRAM=tmux instead of the host terminal.
         for var in TERMINAL_ENV_TO_FORWARD {
             if let Ok(val) = std::env::var(var) {
                 c.arg("-e").arg(format!("{var}={val}"));
             }
+        }
+        for (var, val) in TERMINAL_ENV_HARDCODED {
+            c.arg("-e").arg(format!("{var}={val}"));
         }
         let status = c
             .args(["-it", "-w", "/home/dev", name])
@@ -635,6 +640,13 @@ pub fn build_image_at(
 /// signal apps check for truecolor — without it they degrade below what the
 /// terminal can render. (TERM/TERM_PROGRAM are set by tmux itself, not us.)
 const TERMINAL_ENV_TO_FORWARD: &[&str] = &["COLORTERM"];
+/// Env vars to unconditionally inject into every workspace `exec` (not copied
+/// from the host). `NERD_FONTS=1` forces Nerd Font glyph rendering in agents
+/// like omp, whose auto-detection fails inside tmux (TERM_PROGRAM=tmux).
+/// Belt-and-suspenders: the same value is baked at `docker run` time (see
+/// `workspace::run_opts`), but forwarding it on every `exec` also covers
+/// containers created before that fix landed.
+const TERMINAL_ENV_HARDCODED: &[(&str, &str)] = &[("NERD_FONTS", "1")];
 
 #[cfg(test)]
 mod tests {
@@ -646,5 +658,13 @@ mod tests {
         // for truecolor; it must be forwarded or they degrade below the
         // terminal's real capability.
         assert!(TERMINAL_ENV_TO_FORWARD.contains(&"COLORTERM"));
+    }
+
+    #[test]
+    fn terminal_env_hardcoded_forces_nerd_fonts() {
+        // NERD_FONTS=1 must be injected on every exec so agents like omp
+        // render Nerd Font glyphs even when TERM_PROGRAM=tmux hides the host
+        // terminal from their auto-detection.
+        assert!(TERMINAL_ENV_HARDCODED.contains(&("NERD_FONTS", "1")));
     }
 }

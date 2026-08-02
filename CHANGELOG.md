@@ -90,6 +90,9 @@ The first public release. Not yet tagged — see
   glyphs. work's in-container tmux makes them see `TERM_PROGRAM=tmux` instead of
   the host terminal, defeating their Nerd-Font auto-detection (omp only trusts
   Ghostty/iTerm/WezTerm/Kitty/Alacritty); `NERD_FONTS=1` forces it. The host
-  terminal still renders the glyphs.
+  terminal still renders the glyphs. The value is injected at both `docker run`
+  (container env) and `docker exec` (attach), so it reaches omp even in
+  containers created before the fix; the default `.tmux.conf` re-picks it up
+  via `update-environment` on re-attach.
 
 [Unreleased]: https://github.com/coelhucas-dev/work-cli/commits/main

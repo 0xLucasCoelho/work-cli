@@ -712,9 +712,10 @@ const TMUX_CONF_DEFAULT: &str = r#"# Default work tmux config. Override: `work n
 # render correctly instead of falling back to the 8-color `screen` default.
 set -g default-terminal "tmux-256color"
 set -ga terminal-overrides ",*256col*:Tc"
-# Re-pick up the forwarded COLORTERM on attach, so apps detect truecolor
-# without needing the in-container tmux server to restart.
-set -ag update-environment " COLORTERM"
+# Re-pick up forwarded COLORTERM + NERD_FONTS on attach, so apps detect
+# truecolor and render Nerd Font glyphs without needing the in-container
+# tmux server to restart.
+set -ag update-environment " COLORTERM NERD_FONTS"
 # Vim/agent friendly: don't delay Esc.
 set -sg escape-time 10
 "#;
