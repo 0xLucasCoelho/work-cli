@@ -86,5 +86,10 @@ The first public release. Not yet tagged — see
 - Forward the host's `COLORTERM` into workspace attach so TUI agents detect
   truecolor (they were forced to ANSI/16-color because `docker exec` dropped it).
   The default `.tmux.conf` also re-picks up `COLORTERM` on re-attach.
+- Set `NERD_FONTS=1` in workspace containers so agents like omp render Nerd Font
+  glyphs. work's in-container tmux makes them see `TERM_PROGRAM=tmux` instead of
+  the host terminal, defeating their Nerd-Font auto-detection (omp only trusts
+  Ghostty/iTerm/WezTerm/Kitty/Alacritty); `NERD_FONTS=1` forces it. The host
+  terminal still renders the glyphs.
 
 [Unreleased]: https://github.com/coelhucas-dev/work-cli/commits/main

@@ -372,7 +372,12 @@ impl Workspace {
 }
 
 /// `docker run` options for a workspace container. Sets the `WORK`/`WORKSPACE`
-/// identity env so prompts, banners, and tools can name the workspace.
+/// identity env, the xdg-open browser shim, and `NERD_FONTS=1`: work's
+/// in-container tmux makes agents like omp see `TERM_PROGRAM=tmux` instead of
+/// the host terminal, so their Nerd-Font auto-detection fails and they fall
+/// back to ASCII glyphs. `NERD_FONTS=1` forces Nerd Font glyphs — the host
+/// terminal still renders them. Override per-workspace by unsetting it in your
+/// shell rc.
 fn run_opts(name: &str, image: &str) -> RunOpts {
     RunOpts {
         name: naming::container(name),
@@ -386,6 +391,7 @@ fn run_opts(name: &str, image: &str) -> RunOpts {
             ("WORK".into(), name.into()),
             ("WORKSPACE".into(), name.into()),
             ("BROWSER".into(), crate::browser::SHIM_DEST.into()),
+            ("NERD_FONTS".into(), "1".into()),
         ],
     }
 }
@@ -757,6 +763,7 @@ mod tests {
                 ("WORK".to_string(), "acme".to_string()),
                 ("WORKSPACE".to_string(), "acme".to_string()),
                 ("BROWSER".to_string(), "/usr/local/bin/xdg-open".to_string()),
+                ("NERD_FONTS".to_string(), "1".to_string()),
             ]
         );
     }
