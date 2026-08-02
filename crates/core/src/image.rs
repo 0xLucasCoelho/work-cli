@@ -86,7 +86,7 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf \
       starship zoxide \
  && rm -rf /usr/local/registry /usr/local/.crates*
 # GOTCHA — glibc version: some projects' default Linux binaries need a newer
-# glibc than Debian bookworm ships (2.36). If a binstalled binary fails with
+# glibc than the base image ships. If a binstalled binary fails with
 # `GLIBC_2.xx not found`, fetch that tool's *musl* (static) build instead, e.g.
 # for atuin:
 #   RUN ARCH=$(uname -m) \

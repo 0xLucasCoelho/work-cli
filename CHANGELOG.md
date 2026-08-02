@@ -35,7 +35,7 @@ The first public release. Not yet tagged — see
 
 ### Added — images
 - `work image build [--tag <t>] [--dockerfile <f>]` — build the default
-  `work-base:latest` (node + git + tmux + zsh + bash + curl/jq/build-essential,
+  `work-base:latest` (git + tmux + zsh + bash + curl/jq/build-essential,
   non-root `dev`) or a custom image.
 - `work image init [--output <f>]` — scaffold a personal-image Dockerfile that
   extends `work-base`, with the glibc/musl gotcha documented.
@@ -59,8 +59,9 @@ The first public release. Not yet tagged — see
   (covers `.config/nvim`, `.config/atuin`, …); optional global `import_dotfiles`.
 - `work new --use-author-default` seeds the repo's bundled `personal/dotfiles` templates
   (embedded in the binary at build) + the configured `default_image` — one-command setup.
-- `Dockerfile.personal` (the `work-lucas` image) bakes claude, codex, omp, Antigravity
-  (`agy`), and nvim alongside the existing CLI tools.
+- `Dockerfile.personal` (the `work-lucas` image, **Ubuntu 24.04 LTS**) bakes
+  claude, codex, omp, Antigravity (`agy`), and nvim alongside
+  fzf/ripgrep/direnv/starship/zoxide/fd/bat/eza/git-delta/atuin/mise.
 
 ### Added — distribution & update awareness
 - Homebrew tap: `brew install coelhucas-dev/tap/work` (bottles from release
@@ -75,6 +76,12 @@ The first public release. Not yet tagged — see
 
 ### Changed
 - Container-engine-agnostic: auto-detect OrbStack → Docker → Podman → Colima.
+- Base image switched from `node:20-bookworm-slim` to `debian:trixie-slim`;
+  Node is no longer bundled (it was only there for the personal image's npm
+  globals; the personal image installs Node 22 via NodeSource).
+- Personal image (`Dockerfile.personal`) is now a standalone Ubuntu 24.04 LTS
+  image instead of extending `work-base`. Noble's glibc 2.39 and neovim 0.9.5
+  eliminate the atuin musl workaround and the nvim tarball download.
 
 ### Fixed
 - Default workspace containers render TUI agents (omp, Claude Code, …) and

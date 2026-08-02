@@ -1,5 +1,5 @@
 # work-base: default isolated workspace image. Brings-your-own tools/logins.
-FROM node:20-bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
