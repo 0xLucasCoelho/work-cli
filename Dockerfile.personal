@@ -1,0 +1,70 @@
+# work-lucas: personal workspace image (Ubuntu 24.04 LTS, arm64-native).
+#
+# Standalone — does NOT extend work-base. Replicates every isolation invariant
+# work doctor checks (non-root dev @ /home/dev, tmux/zsh/bash) plus terminal
+# and locale setup for correct TUI rendering inside containers.
+#
+# Ubuntu 24.04 (Noble) ships glibc 2.39 and neovim 0.9.5, eliminating the
+# atuin musl workaround and nvim tarball download that bookworm needed.
+#
+# Build:   work image build --tag work-lucas:latest --dockerfile ./Dockerfile.personal
+# Use:     work new <ws> --image work-lucas:latest
+# Default: set `default_image = "work-lucas:latest"` in ~/.config/work/config.toml
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- System packages (neovim 0.9.5 + fzf/ripgrep/direnv from apt) ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git openssh-client ca-certificates tmux zsh bash sudo curl jq build-essential \
+      fzf ripgrep direnv less file unzip neovim \
+      ncurses-term locales \
+ && locale-gen en_US.UTF-8 \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- Node 22 LTS via NodeSource (Ubuntu 24.04 ships Node 18, which is EOL) ---
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- Rust-based CLIs via cargo-binstall (not in Ubuntu repos) ---
+# glibc 2.39 is new enough for gnu releases — no musl workarounds needed.
+ENV CARGO_HOME=/usr/local
+RUN curl -L --proto '=https' --tlsv1.2 -sSf \
+      https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
+    | bash \
+ && cargo-binstall -y --disable-strategies compile \
+      starship zoxide fd-find bat eza git-delta atuin mise \
+ && rm -rf /usr/local/registry /usr/local/.crates*
+
+# --- Terminal + locale defaults (same rationale as work-base) ---
+ENV TERM=xterm-256color \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+# --- Non-root dev user (work doctor invariant) ---
+RUN useradd -m -d /home/dev -s /usr/bin/zsh dev \
+ && echo 'dev ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+
+# --- PATH for every zsh shell (login, interactive, scripts) ---
+RUN printf '%s\n' 'export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"' >> /etc/zsh/zshenv
+
+# --- zinit (zsh plugin manager) ---
+USER dev
+RUN mkdir -p /home/dev/.local/share/zinit \
+ && git clone --depth 1 \
+      https://github.com/zdharma-continuum/zinit.git \
+      /home/dev/.local/share/zinit/zinit.git
+
+# --- AI coding agents (npm globals; node 22 installed above) ---
+USER root
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
+
+# --- omp (Oh My Pi) + Antigravity (agy): user-local installers -> ~/.local/bin ---
+USER dev
+RUN curl -fsSL https://omp.sh/install | bash
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash
+
+USER dev
+WORKDIR /home/dev

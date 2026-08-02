@@ -1,5 +1,5 @@
 //! Author-default dotfile templates, embedded at build from `personal/dotfiles`.
-//! `--use-author-default` extracts these into a workspace so it comes up with the
+//! `--default` extracts these into a workspace so it comes up with the
 //! author's full shell/editor/agent config — no external path required.
 
 use anyhow::{Context, Result};

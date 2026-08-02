@@ -328,7 +328,7 @@ pub struct NewArgs {
     /// Recursively copy a dotfiles directory into the workspace's /home/dev.
     #[arg(long = "import-dotfiles")]
     pub import_dotfiles: Option<std::path::PathBuf>,
-    /// Seed the author's bundled dotfile templates (from the repo) into the workspace.
-    #[arg(long = "use-author-default")]
+    /// Use the author's bundled dotfiles + configured default image.
+    #[arg(long = "default")]
     pub use_author_default: bool,
 }

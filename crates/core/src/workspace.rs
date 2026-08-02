@@ -67,7 +67,7 @@ impl Workspace {
         let global = config::load_global()?;
         let image = image.unwrap_or_else(|| global.effective_default_image().to_string());
         // Optional dotfiles tree import (explicit --import-dotfiles overrides the
-        // global default; --use-author-default falls back to the embedded templates).
+        // global default; --default falls back to the embedded templates).
         let dotfiles_dir = import_dotfiles.or(global.import_dotfiles.clone());
         let seed_author_default = use_author_default && dotfiles_dir.is_none();
 
@@ -137,7 +137,7 @@ impl Workspace {
         let _ = crate::browser::install_shim(&*engine, &ctr);
 
         // Seed the dotfiles tree first (explicit dir, or the author's embedded
-        // templates via --use-author-default) so per-file imports below can still
+        // templates via --default) so per-file imports below can still
         // override individual files like .zshrc.
         if let Some(dir) = &dotfiles_dir {
             engine
