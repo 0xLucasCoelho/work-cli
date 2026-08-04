@@ -173,6 +173,11 @@ pub fn ls() -> Result<()> {
     Ok(())
 }
 
+/// Bare `work` (interactive TTY): open the dashboard.
+pub fn dashboard(yes: bool) -> Result<()> {
+    crate::tui::run(yes)
+}
+
 /// `work resume` / `work all`: host tmux cockpit tiling running sessions.
 pub fn resume() -> Result<()> {
     workspace::resume()

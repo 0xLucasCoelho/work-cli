@@ -240,7 +240,17 @@ fn main() -> Result<ExitCode> {
 
     let cli = Cli::parse_from(std::iter::once("work").chain(raw.iter().map(String::as_str)));
     match cli.command {
-        None => commands::ls()?,
+        None => {
+            use std::io::IsTerminal;
+            let interactive = std::io::stdin().is_terminal()
+                && std::io::stdout().is_terminal()
+                && std::env::var_os("TERM").map_or(true, |t| t != "dumb");
+            if interactive {
+                commands::dashboard(cli.yes)?;
+            } else {
+                commands::ls()?;
+            }
+        }
         Some(Command::New(a)) => commands::new(
             &a.name,
             a.image,
