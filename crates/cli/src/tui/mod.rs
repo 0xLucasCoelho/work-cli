@@ -59,7 +59,7 @@ use super::commands;
 
 /// Entry point: probe the engine BEFORE raw mode, enter the TUI, run until quit/attach.
 /// `yes` is the global --yes (used in Phase 4 for destructive confirms).
-pub(crate) fn run(_yes: bool) -> anyhow::Result<()> {
+pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
     let engine = work_core::engine::detect()?;
     if !engine.is_running().unwrap_or(false) {
         anyhow::bail!(
@@ -77,7 +77,7 @@ pub(crate) fn run(_yes: bool) -> anyhow::Result<()> {
         let mut app = App::new();
         app.set_model(load_model()?);
         refresh_tabs(&mut app)?;
-        run_loop(&mut tui, &mut app)?;
+        run_loop(&mut tui, &mut app, yes)?;
         app.pending_attach().take()
     };
     if let Some(name) = pending {
@@ -86,16 +86,46 @@ pub(crate) fn run(_yes: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_loop(tui: &mut Tui, app: &mut App) -> anyhow::Result<()> {
+fn run_loop(tui: &mut Tui, app: &mut App, yes: bool) -> anyhow::Result<()> {
+    use work_core::safety::Severity;
+    use work_core::workspace::Workspace;
+    use self::app::ConfirmAction;
     const TICK: Duration = Duration::from_millis(250);
     loop {
         tui.draw(|f| render::render(f, app))?;
         if !poll(TICK)? {
-            continue; // tick: background-refresh channel drains here in Phase 4
+            continue; // background-refresh worker wires here in Task 4.3
         }
-        while let Ok(event) = read() {
-            if let Event::Key(key) = event {
-                if key.kind != KeyEventKind::Press { continue; }
+        // Non-blocking drain: handle all ready events, then redraw.
+        loop {
+            let Ok(event) = read() else { break; };
+            let Event::Key(key) = event else {
+                if !poll(Duration::ZERO)? { break; }
+                continue;
+            };
+            if key.kind != KeyEventKind::Press {
+                if !poll(Duration::ZERO)? { break; }
+                continue;
+            }
+
+            // While a confirm is pending, only y / n / Esc / q / Ctrl-C respond.
+            if app.confirm().is_some() {
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Enter => {
+                        if let Some(c) = app.take_confirm() {
+                            let r = match c.action {
+                                ConfirmAction::Stop => Workspace::open(&c.ws).and_then(|w| w.stop()),
+                                ConfirmAction::Remove => Workspace::open(&c.ws).and_then(|w| w.remove(false)),
+                            };
+                            app.set_status(result_msg(r, &c.ws, verb_for(c.action)));
+                        }
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => app.cancel_confirm(),
+                    KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                    _ => {}
+                }
+            } else if let Some(name) = app.selected_name().map(str::to_string) {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
@@ -106,15 +136,56 @@ fn run_loop(tui: &mut Tui, app: &mut App) -> anyhow::Result<()> {
                         refresh_tabs(app)?;
                     }
                     KeyCode::Enter => {
-                        if let Some(name) = app.selected_name() {
-                            app.request_attach(name.to_string());
-                            return Ok(());
-                        }
+                        app.request_attach(name);
+                        return Ok(()); // attach after teardown (run() handles it)
                     }
+                    KeyCode::Char('s') => {
+                        let r = Workspace::open(&name).and_then(|w| w.start());
+                        app.set_status(result_msg(r, &name, "started"));
+                    }
+                    KeyCode::Char('x') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Stop, "Stop", |w| w.stop()),
+                    KeyCode::Char('d') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Remove, "Remove", |w| w.remove(false)),
                     _ => {}
                 }
             }
+            if !poll(Duration::ZERO)? { break; }
         }
+    }
+}
+
+fn verb_for(a: self::app::ConfirmAction) -> &'static str {
+    match a { self::app::ConfirmAction::Stop => "stopped", self::app::ConfirmAction::Remove => "removed" }
+}
+
+fn result_msg(r: anyhow::Result<()>, ws: &str, verb: &str) -> String {
+    match r { Ok(()) => format!("{ws}: {verb}"), Err(e) => format!("{ws}: {verb} failed: {e}") }
+}
+
+/// Apply the destructive-op safety policy. Proceed runs now; Prompt queues an
+/// inline confirm; Refuse (non-interactive w/o --yes) reports a status.
+fn gate(
+    app: &mut self::app::App,
+    name: &str,
+    yes: bool,
+    severity: work_core::safety::Severity,
+    action: self::app::ConfirmAction,
+    verb: &str,
+    f: impl FnOnce(&work_core::workspace::Workspace) -> anyhow::Result<()>,
+) {
+    use work_core::safety::{self, Action};
+    use work_core::workspace::Workspace;
+    let live = Workspace::open(name).map(|w| w.has_live_session()).unwrap_or(false);
+    match safety::decide(severity, live, true, yes) {
+        Action::Proceed => {
+            let r = Workspace::open(name).and_then(|w| f(&w));
+            app.set_status(result_msg(r, name, verb_for(action)));
+        }
+        Action::Prompt => app.request_confirm(self::app::Confirm {
+            ws: name.to_string(),
+            action,
+            blurb: format!("{verb} {name}? A live session will end. [y/N]"),
+        }),
+        Action::Refuse => app.set_status(format!("{name}: {verb} refused (non-interactive; pass --yes)")),
     }
 }
 

@@ -7,11 +7,22 @@ use work_core::engine::ContainerState;
 use std::collections::HashMap;
 use work_core::workspace::{WindowRow, WorkspaceStatus};
 
+#[derive(Clone, Copy)]
+pub(crate) enum ConfirmAction { Stop, Remove }
+
+/// A pending destructive-op confirmation. While `Some`, the event loop only
+/// answers y / n / Esc / q / Ctrl-C.
+pub(crate) struct Confirm {
+    pub ws: String,
+    pub action: ConfirmAction,
+    pub blurb: String,
+}
 pub(crate) struct App {
     model: Vec<WorkspaceStatus>,
     selected: Option<String>, // workspace NAME under the cursor
     quit: bool,
     status: Option<String>,
+    confirm: Option<Confirm>, // pending destructive-op confirm (s/x/d gate)
     pending_attach: Option<String>, // workspace NAME to attach after TUI teardown
     expanded: Option<String>, // workspace NAME that's expanded to show its tabs
     tabs: HashMap<String, Vec<WindowRow>>, // cached tab rows per workspace NAME
@@ -24,6 +35,7 @@ impl App {
             selected: None,
             quit: false,
             status: None,
+            confirm: None,
             pending_attach: None,
             expanded: None,
             tabs: HashMap::new(),
@@ -81,6 +93,10 @@ impl App {
 
     pub(crate) fn set_status(&mut self, msg: impl Into<String>) { self.status = Some(msg.into()); }
     pub(crate) fn status_message(&self) -> Option<&str> { self.status.as_deref() }
+    pub(crate) fn confirm(&self) -> Option<&Confirm> { self.confirm.as_ref() }
+    pub(crate) fn request_confirm(&mut self, c: Confirm) { self.confirm = Some(c); }
+    pub(crate) fn cancel_confirm(&mut self) { self.confirm = None; }
+    pub(crate) fn take_confirm(&mut self) -> Option<Confirm> { self.confirm.take() }
 
     pub(crate) fn request_attach(&mut self, name: String) { self.pending_attach = Some(name); }
     pub(crate) fn pending_attach(&mut self) -> &mut Option<String> { &mut self.pending_attach }

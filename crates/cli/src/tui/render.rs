@@ -78,8 +78,12 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
     }
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
-    let footer = app.status_message().unwrap_or(
-        "Up/Dn move · Enter attach · s start · x stop · d rm · t tab · n new · / filter · r refresh · q/Ctrl-C quit"
-    );
+    let footer = if let Some(c) = app.confirm() {
+        c.blurb.clone()
+    } else {
+        app.status_message().unwrap_or(
+            "Up/Dn move · Enter attach · s start · x stop · d rm · t tab · n new · / filter · r refresh · q/Ctrl-C quit"
+        ).to_string()
+    };
     frame.render_widget(Paragraph::new(footer), chunks[1]);
 }
