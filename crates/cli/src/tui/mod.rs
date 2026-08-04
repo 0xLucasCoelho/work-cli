@@ -125,27 +125,34 @@ fn run_loop(tui: &mut Tui, app: &mut App, yes: bool) -> anyhow::Result<()> {
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                     _ => {}
                 }
-            } else if let Some(name) = app.selected_name().map(str::to_string) {
+            } else {
+                // Quit keys must work regardless of whether a workspace is selected,
+                // so an empty list never traps the user.
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-                    KeyCode::Down | KeyCode::Char('j') => app.move_down(),
-                    KeyCode::Up | KeyCode::Char('k') => app.move_up(),
-                    KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => {
-                        app.toggle_expand();
-                        refresh_tabs(app)?;
-                    }
-                    KeyCode::Enter => {
-                        app.request_attach(name);
-                        return Ok(()); // attach after teardown (run() handles it)
-                    }
-                    KeyCode::Char('s') => {
-                        let r = Workspace::open(&name).and_then(|w| w.start());
-                        app.set_status(result_msg(r, &name, "started"));
-                    }
-                    KeyCode::Char('x') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Stop, "Stop", |w| w.stop()),
-                    KeyCode::Char('d') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Remove, "Remove", |w| w.remove(false)),
                     _ => {}
+                }
+                if let Some(name) = app.selected_name().map(str::to_string) {
+                    match key.code {
+                        KeyCode::Down | KeyCode::Char('j') => app.move_down(),
+                        KeyCode::Up | KeyCode::Char('k') => app.move_up(),
+                        KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => {
+                            app.toggle_expand();
+                            refresh_tabs(app)?;
+                        }
+                        KeyCode::Enter => {
+                            app.request_attach(name);
+                            return Ok(()); // attach after teardown (run() handles it)
+                        }
+                        KeyCode::Char('s') => {
+                            let r = Workspace::open(&name).and_then(|w| w.start());
+                            app.set_status(result_msg(r, &name, "started"));
+                        }
+                        KeyCode::Char('x') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Stop, "Stop", |w| w.stop()),
+                        KeyCode::Char('d') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Remove, "Remove", |w| w.remove(false)),
+                        _ => {}
+                    }
                 }
             }
             if !poll(Duration::ZERO)? { break; }
