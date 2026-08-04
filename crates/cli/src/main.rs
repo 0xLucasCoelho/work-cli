@@ -153,6 +153,11 @@ enum Command {
     /// volume, runs non-root, uses the configured image, and publishes no host
     /// ports.
     Doctor,
+    /// Bare `work <ws>`: attach to a workspace's persistent session.
+    /// External-subcommand name is `args[0]`; trailing tokens are `args[1..]`.
+    /// Modeled natively so dynamic completion can offer workspace names for it.
+    #[command(external_subcommand)]
+    Other(Vec<String>),
 }
 
 #[derive(Subcommand)]
@@ -237,14 +242,6 @@ fn main() -> Result<ExitCode> {
     // cache refreshes for short-lived commands. Off in CI/non-TTY.
     let _update_guard = work_core::update::run_check();
 
-    // Bare workspace name dispatch: `work <ws>`.
-    if let Some(first) = raw.first() {
-        if !first.starts_with('-') && !RESERVED.contains(&first.as_str()) {
-            commands::shell(first)?;
-            return Ok(ExitCode::SUCCESS);
-        }
-    }
-
     let cli = Cli::parse_from(std::iter::once("work").chain(raw.iter().map(String::as_str)));
     match cli.command {
         None => commands::ls()?,
@@ -287,6 +284,11 @@ fn main() -> Result<ExitCode> {
         Some(Command::Doctor) => {
             return commands::doctor();
         }
+        Some(Command::Other(args)) => {
+            // `work <ws>` -> attach. args[0] is the workspace name (validated by shell()).
+            let name = args.first().cloned().unwrap_or_default();
+            commands::shell(&name)?;
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -321,5 +323,41 @@ mod tests {
     #[test]
     fn help_subcommand_form_untouched() {
         assert_eq!(normalize_help_arg(v(&["help", "new"])), v(&["help", "new"]));
+    }
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::parse_from(std::iter::once("work").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn bare_workspace_parses_as_other() {
+        let cli = parse(&["acme"]);
+        match cli.command {
+            Some(Command::Other(args)) => assert_eq!(args, vec!["acme".to_string()]),
+            other => panic!(
+                "expected Some(Command::Other(_)), got discriminant {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn yes_flag_before_name_is_applied() {
+        let cli = parse(&["--yes", "acme"]);
+        assert!(cli.yes);
+        assert!(matches!(cli.command, Some(Command::Other(_))));
+    }
+
+    #[test]
+    fn named_subcommands_still_match() {
+        assert!(matches!(parse(&["new", "x"]).command, Some(Command::New(_))));
+        assert!(matches!(parse(&["ls"]).command, Some(Command::Ls)));
+        assert!(matches!(parse(&["stop", "x"]).command, Some(Command::Stop { .. })));
+        assert!(matches!(parse(&["tab", "x"]).command, Some(Command::Tab { .. })));
+    }
+
+    #[test]
+    fn bare_work_is_none() {
+        assert!(parse(&[]).command.is_none());
     }
 }
