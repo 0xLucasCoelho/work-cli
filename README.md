@@ -62,6 +62,23 @@ work --version
 work doctor     # engine sanity + isolation check (no workspaces yet)
 ```
 
+## Shell completion (live workspace names)
+
+`work` ships dynamic completion: commands, flags, and your real workspace names
+(e.g. `work start ac`<TAB> completes from your workspaces). Add the matching line
+to your shell's rc file — it regenerates on every shell startup, so it stays in
+sync with the binary across upgrades:
+
+```sh
+# ~/.zshrc  or  ~/.bashrc
+source <(COMPLETE=zsh work)      # use COMPLETE=bash work for bash
+# ~/.config/fish/completions/work.fish
+COMPLETE=fish work | source
+```
+
+Don't write the generated script to a file — a stale file breaks across `work`
+upgrades. After upgrading `work`, just relaunch your shell.
+
 ## Upgrade
 
 `work` checks for a new release once a day and prints a one-line hint (to stderr,
