@@ -13,6 +13,11 @@ path = "src/main.rs"
 work-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+# Dynamic (live workspace-name) completion. `unstable-dynamic` is UNSTABLE: the
+# binary<->shim wire protocol can change across releases, so the exact version is
+# fixed by Cargo.lock (currently 4.6.8). Bump deliberately; users then relaunch
+# their shell (the install regenerates the shim on each startup).
+clap_complete.workspace = true
 toml.workspace = true
 
 [package.metadata.binstall]
