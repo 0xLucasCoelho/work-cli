@@ -100,6 +100,7 @@ fn run_loop(tui: &mut Tui, app: &mut App) -> anyhow::Result<()> {
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                     KeyCode::Down | KeyCode::Char('j') => app.move_down(),
                     KeyCode::Up | KeyCode::Char('k') => app.move_up(),
+                    KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => app.toggle_expand(),
                     KeyCode::Enter => {
                         if let Some(name) = app.selected_name() {
                             app.request_attach(name.to_string());

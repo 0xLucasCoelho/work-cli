@@ -4,7 +4,8 @@
 
 #[cfg(test)]
 use work_core::engine::ContainerState;
-use work_core::workspace::WorkspaceStatus;
+use std::collections::HashMap;
+use work_core::workspace::{WindowRow, WorkspaceStatus};
 
 pub(crate) struct App {
     model: Vec<WorkspaceStatus>,
@@ -12,11 +13,21 @@ pub(crate) struct App {
     quit: bool,
     status: Option<String>,
     pending_attach: Option<String>, // workspace NAME to attach after TUI teardown
+    expanded: Option<String>, // workspace NAME that's expanded to show its tabs
+    tabs: HashMap<String, Vec<WindowRow>>, // cached tab rows per workspace NAME
 }
 
 impl App {
     pub(crate) fn new() -> Self {
-        Self { model: Vec::new(), selected: None, quit: false, status: None, pending_attach: None }
+        Self {
+            model: Vec::new(),
+            selected: None,
+            quit: false,
+            status: None,
+            pending_attach: None,
+            expanded: None,
+            tabs: HashMap::new(),
+        }
     }
 
     /// Replace the model from a refresh, re-resolving the cursor by NAME. If the
@@ -74,6 +85,29 @@ impl App {
     pub(crate) fn request_attach(&mut self, name: String) { self.pending_attach = Some(name); }
     pub(crate) fn pending_attach(&mut self) -> &mut Option<String> { &mut self.pending_attach }
 
+    /// Toggle the expanded state of the workspace under the cursor. Expanding a
+    /// second workspace collapses the first (only one expanded at a time). With
+    /// nothing selected this is a no-op.
+    pub(crate) fn toggle_expand(&mut self) {
+        let Some(name) = self.selected_name() else { return; };
+        self.expanded =
+            if self.expanded.as_deref() == Some(name) { None } else { Some(name.to_string()) };
+    }
+
+    /// Name of the workspace whose tab rows are currently shown, if any.
+    pub(crate) fn expanded_name(&self) -> Option<&str> { self.expanded.as_deref() }
+
+    /// Cached tab rows for the expanded workspace, if any. `Some([])` is a loaded
+    /// workspace with zero tabs; `None` means "not loaded yet" (Task 3.2 fetches).
+    pub(crate) fn expanded_tabs(&self) -> Option<&[WindowRow]> {
+        self.expanded.as_deref().and_then(|n| self.tabs.get(n)).map(|v| v.as_slice())
+    }
+
+    /// Cache (or replace) the tab rows for a workspace, keyed by NAME.
+    pub(crate) fn set_tabs(&mut self, ws: &str, tabs: Vec<WindowRow>) {
+        self.tabs.insert(ws.to_string(), tabs);
+    }
+
     pub(crate) fn is_empty(&self) -> bool { self.model.is_empty() }
 }
 #[cfg(test)]
@@ -123,5 +157,19 @@ mod tests {
         assert_eq!(app.selected_name(), Some("blog"));
         app.move_up();
         assert_eq!(app.selected_name(), Some("acme"));
+    }
+
+    #[test]
+    fn toggle_expand_flips_expanded_and_tabs() {
+        use work_core::workspace::WindowRow;
+        let mut app = App::new();
+        app.set_model(vec![ws("acme"), ws("blog")]);
+        assert_eq!(app.expanded_name(), None);
+        app.toggle_expand(); // expands the selected (acme)
+        assert_eq!(app.expanded_name(), Some("acme"));
+        app.set_tabs("acme", vec![WindowRow { index: "1".into(), name: "build".into(), panes: "1".into(), active: true, command: "zsh".into() }]);
+        assert_eq!(app.expanded_tabs().map(|t| t.len()), Some(1));
+        app.toggle_expand(); // collapses
+        assert_eq!(app.expanded_name(), None);
     }
 }
