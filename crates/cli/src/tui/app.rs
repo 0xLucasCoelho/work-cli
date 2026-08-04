@@ -17,13 +17,24 @@ pub(crate) struct Confirm {
     pub action: ConfirmAction,
     pub blurb: String,
 }
+/// A deferred action to run after the TUI tears down (so it gets a normal TTY).
+/// Attach/NewTab both start an interactive shell; Create builds a workspace and
+/// then attaches to it.
+pub(crate) enum PendingAction { Attach(String), Create(String), NewTab(String) }
+
+/// Inline text-input sub-mode (e.g. entering a new-workspace name). While `Some`
+/// the event loop intercepts text keys instead of normal navigation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode { New }
 pub(crate) struct App {
     model: Vec<WorkspaceStatus>,
     selected: Option<String>, // workspace NAME under the cursor
     quit: bool,
     status: Option<String>,
     confirm: Option<Confirm>, // pending destructive-op confirm (s/x/d gate)
-    pending_attach: Option<String>, // workspace NAME to attach after TUI teardown
+    pending: Option<PendingAction>, // deferred action (attach/create/new-tab) after TUI teardown
+    mode: Option<Mode>, // active inline text-input sub-mode, if any
+    buf: String, // text buffer for the active input mode
     expanded: Option<String>, // workspace NAME that's expanded to show its tabs
     tabs: HashMap<String, Vec<WindowRow>>, // cached tab rows per workspace NAME
 }
@@ -35,8 +46,10 @@ impl App {
             selected: None,
             quit: false,
             status: None,
+            pending: None,
+            mode: None,
+            buf: String::new(),
             confirm: None,
-            pending_attach: None,
             expanded: None,
             tabs: HashMap::new(),
         }
@@ -98,8 +111,18 @@ impl App {
     pub(crate) fn cancel_confirm(&mut self) { self.confirm = None; }
     pub(crate) fn take_confirm(&mut self) -> Option<Confirm> { self.confirm.take() }
 
-    pub(crate) fn request_attach(&mut self, name: String) { self.pending_attach = Some(name); }
-    pub(crate) fn pending_attach(&mut self) -> &mut Option<String> { &mut self.pending_attach }
+    pub(crate) fn request_attach(&mut self, name: String) { self.pending = Some(PendingAction::Attach(name)); }
+    pub(crate) fn request_create(&mut self, name: String) { self.pending = Some(PendingAction::Create(name)); }
+    pub(crate) fn request_tab(&mut self, name: String) { self.pending = Some(PendingAction::NewTab(name)); }
+    pub(crate) fn pending(&mut self) -> &mut Option<PendingAction> { &mut self.pending }
+
+    pub(crate) fn mode(&self) -> Option<Mode> { self.mode }
+    pub(crate) fn enter_mode(&mut self, m: Mode) { self.mode = Some(m); self.buf.clear(); }
+    pub(crate) fn cancel_mode(&mut self) { self.mode = None; self.buf.clear(); }
+    pub(crate) fn buf_push(&mut self, c: char) { self.buf.push(c); }
+    pub(crate) fn buf_pop(&mut self) { self.buf.pop(); }
+    pub(crate) fn buf_str(&self) -> &str { &self.buf }
+    pub(crate) fn buf_take(&mut self) -> String { std::mem::take(&mut self.buf) }
 
     /// Toggle the expanded state of the workspace under the cursor. Expanding a
     /// second workspace collapses the first (only one expanded at a time). With

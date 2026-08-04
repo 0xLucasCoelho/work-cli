@@ -78,10 +78,13 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
         app.set_model(load_model()?);
         refresh_tabs(&mut app)?;
         run_loop(&mut tui, &mut app, yes)?;
-        app.pending_attach().take()
+        app.pending().take()
     };
-    if let Some(name) = pending {
-        commands::attach(&name)?;
+    match pending {
+        Some(app::PendingAction::Attach(n)) => commands::attach(&n)?,
+        Some(app::PendingAction::NewTab(n)) => commands::tab(&n, None)?,
+        Some(app::PendingAction::Create(n)) => commands::new(&n, None, None, None, None, None, None, None, false)?,
+        None => {}
     }
     Ok(())
 }
@@ -126,32 +129,61 @@ fn run_loop(tui: &mut Tui, app: &mut App, yes: bool) -> anyhow::Result<()> {
                     _ => {}
                 }
             } else {
-                // Quit keys must work regardless of whether a workspace is selected,
-                // so an empty list never traps the user.
+                // Quit keys work regardless of selection. When an input mode is
+                // active, Esc cancels input (handled in the input branch) rather
+                // than quitting — so only quit on Esc when no mode is active.
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Esc if app.mode().is_none() => return Ok(()),
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                     _ => {}
                 }
-                if let Some(name) = app.selected_name().map(str::to_string) {
+                // Inline text-input mode (e.g. new-workspace name entry).
+                if app.mode().is_some() {
                     match key.code {
-                        KeyCode::Down | KeyCode::Char('j') => app.move_down(),
-                        KeyCode::Up | KeyCode::Char('k') => app.move_up(),
-                        KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => {
-                            app.toggle_expand();
-                            refresh_tabs(app)?;
-                        }
+                        KeyCode::Char(c) => app.buf_push(c),
+                        KeyCode::Backspace => app.buf_pop(),
                         KeyCode::Enter => {
-                            app.request_attach(name);
-                            return Ok(()); // attach after teardown (run() handles it)
+                            let name = app.buf_take();
+                            app.cancel_mode();
+                            if let Err(e) = work_core::naming::validate_name(&name) {
+                                app.set_status(format!("invalid name: {e}"));
+                            } else {
+                                app.request_create(name);
+                                return Ok(()); // create+attach after teardown
+                            }
                         }
-                        KeyCode::Char('s') => {
-                            let r = Workspace::open(&name).and_then(|w| w.start());
-                            app.set_status(result_msg(r, &name, "started"));
-                        }
-                        KeyCode::Char('x') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Stop, "Stop", |w| w.stop()),
-                        KeyCode::Char('d') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Remove, "Remove", |w| w.remove(false)),
+                        KeyCode::Esc => app.cancel_mode(),
                         _ => {}
+                    }
+                } else {
+                    // `n` starts a new workspace (needs no selection).
+                    if key.code == KeyCode::Char('n') {
+                        app.enter_mode(app::Mode::New);
+                    } else if let Some(name) = app.selected_name().map(str::to_string) {
+                        match key.code {
+                            KeyCode::Down | KeyCode::Char('j') => app.move_down(),
+                            KeyCode::Up | KeyCode::Char('k') => app.move_up(),
+                            KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => {
+                                app.toggle_expand();
+                                refresh_tabs(app)?;
+                            }
+                            KeyCode::Enter => {
+                                app.request_attach(name);
+                                return Ok(()); // attach after teardown (run() handles it)
+                            }
+                            KeyCode::Char('s') => {
+                                let r = Workspace::open(&name).and_then(|w| w.start());
+                                app.set_status(result_msg(r, &name, "started"));
+                            }
+                            KeyCode::Char('x') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Stop, "Stop", |w| w.stop()),
+                            KeyCode::Char('d') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Remove, "Remove", |w| w.remove(false)),
+                            KeyCode::Char('t') => {
+                                app.request_tab(name);
+                                return Ok(()); // new tab + attach after teardown
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }

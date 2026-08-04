@@ -80,6 +80,8 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
 
     let footer = if let Some(c) = app.confirm() {
         c.blurb.clone()
+    } else if app.mode() == Some(super::app::Mode::New) {
+        format!("new workspace: {}  (Enter=create · Esc=cancel)", app.buf_str())
     } else {
         app.status_message().unwrap_or(
             "Up/Dn move · Enter attach · s start · x stop · d rm · t tab · n new · / filter · r refresh · q/Ctrl-C quit"
