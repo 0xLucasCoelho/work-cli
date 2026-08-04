@@ -8,6 +8,7 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{CompletedFrame, Frame, Terminal};
 
+mod app;
 #[allow(dead_code)] // used from Task 2.5
 pub(crate) type Term = Terminal<CrosstermBackend<Stdout>>;
 
