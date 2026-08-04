@@ -185,31 +185,11 @@ enum ImageCmd {
     },
 }
 
-// Reserved tokens — if the first arg matches none and isn't a flag, treat it as
-// `work <ws>` (attach to its persistent session).
-const RESERVED: &[&str] = &[
-    "new",
-    "all",
-    "browse",
-    "ls",
-    "start",
-    "stop",
-    "stop-all",
-    "tab",
-    "tabs",
-    "resume",
-    "rm",
-    "fwd",
-    "config",
-    "image",
-    "doctor",
-    "help",
-    "version",
-    "--help",
-    "-h",
-    "--version",
-    "-V",
-];
+/// Tokens that are CLI verbs (not workspace names). Used by `normalize_help_arg`.
+/// Sourced from the single shared set in work-core so it can never drift.
+/// (Flag forms like `--help` are unnecessary here: normalize_help_arg's
+/// `!raw[0].starts_with('-')` guard already excludes them.)
+const RESERVED: &[&str] = work_core::naming::RESERVED;
 
 /// Rewrite `work <cmd> help` -> `work help <cmd>` (and `work image build help` ->
 /// `work help image build`) so the natural trailing-help form works. clap only

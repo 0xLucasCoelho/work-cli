@@ -1,9 +1,13 @@
 //! Naming conventions for work resources. PURE: no IO.
 
 /// Reserved tokens — equal to a CLI verb, so they cannot also be a workspace name.
+///
+/// Single source of truth for the CLI's verbs. `work-cli`'s `main::RESERVED`
+/// references this set so the two can never drift. Any new CLI verb MUST be
+/// added here (and `validate_name` will then reject it as a workspace name).
 pub const RESERVED: &[&str] = &[
-    "new", "all", "browse", "ls", "start", "stop", "fwd", "config", "image", "doctor", "help",
-    "version", "rm", "tab", "tabs",
+    "new", "all", "browse", "ls", "start", "stop", "stop-all", "resume", "fwd", "config", "image",
+    "doctor", "help", "version", "rm", "tab", "tabs",
 ];
 
 pub fn volume(ws: &str) -> String {
@@ -53,5 +57,19 @@ mod tests {
     #[test]
     fn session_name_is_the_workspace_name() {
         assert_eq!(session("acme"), "acme");
+    }
+
+    #[test]
+    fn reserved_includes_every_cli_verb() {
+        for verb in [
+            "new", "all", "browse", "ls", "start", "stop", "stop-all", "resume", "fwd", "config",
+            "image", "doctor", "help", "version", "rm", "tab", "tabs",
+        ] {
+            assert!(RESERVED.contains(&verb), "missing reserved verb: {verb}");
+            assert!(
+                matches!(validate_name(verb), Err(crate::error::NameError::Reserved)),
+                "verb not rejected by validate_name: {verb}"
+            );
+        }
     }
 }
