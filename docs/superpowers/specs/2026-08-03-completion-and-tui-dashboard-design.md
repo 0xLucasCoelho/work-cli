@@ -111,13 +111,18 @@ Attach an `ArgValueCandidates` completer to every arg that takes an **existing**
 The completer is a pure, fast function over the **config directory only** (no docker):
 
 ```rust
-fn workspace_candidates(prefix: &str) -> Vec<CompletionCandidate> {
+use std::ffi::OsStr;
+use clap_complete::engine::{ArgValueCompleter, CompletionCandidate};
+
+/// Lazy completer for EXISTING workspace names. Reads ONLY the config dir (no docker) → instant.
+/// Signature is `Fn(&OsStr) -> Vec<CompletionCandidate>` (NOT `&str`) per the `ValueCompleter`
+/// blanket impl (verified against clap_complete 4.6.8 source). Attach in derive via:
+///   #[arg(add = ArgValueCompleter::new(complete_workspace))]
+pub fn complete_workspace(current: &OsStr) -> Vec<CompletionCandidate> {
+    let Some(prefix) = current.to_str() else { return Vec::new() };
     work_core::config::list_workspace_names()
+        .map(|names| names.into_iter().filter(|n| n.starts_with(prefix)).map(CompletionCandidate::new).collect())
         .unwrap_or_default()
-        .into_iter()
-        .filter(|n| n.starts_with(prefix))
-        .map(CompletionCandidate::new)
-        .collect()
 }
 ```
 
@@ -334,11 +339,14 @@ stays private (module-local). Making the **struct** public is insufficient — t
 ## 7. Dependencies (workspace-pinned in `crates/cli/Cargo.toml`)
 
 - `clap_complete = { version = "4", features = ["unstable-dynamic"] }` — exact patch fixed by `Cargo.lock` (current `4.6.8`); see §5.7 for the unstable-wire-protocol pinning note.
-- `ratatui = "0.30"`
-- `crossterm = "0.28"`
+- `ratatui = "0.30"` — pulls `ratatui-crossterm`; prefer importing crossterm via the `ratatui::crossterm` re-export so event/Command types always match the backend.
+- `crossterm = "0.29"` — **not 0.28**: ratatui 0.30's backend defaults to crossterm 0.29 (verified from ratatui-crossterm's cfg-if precedence); pinning 0.28 adds a dead crate and `CrosstermBackend` rejects a 0.28 stdout. (A direct crossterm dep is optional if you import via the re-export.)
 
 (`clap` stays `"4"`, resolving to ≥4.5.20.) No async runtime.
 
+> **Toolchain:** clap_complete 4.6.8 (`unstable-dynamic`) and ratatui 0.30 raise the build toolchain
+> floor to ~**1.85–1.86**. The repo's `rust-toolchain.toml` pins `channel = "stable"` (current stable
+> ≥ 1.86), so no change is required; just don't pin an older MSRV. `work` itself stays edition 2021.
 ## 8. Phasing (outline for the implementation plan)
 
 1. **Completion** — `CompleteEnv` at top of `main()`; per-arg workspace completers; bare-name via
