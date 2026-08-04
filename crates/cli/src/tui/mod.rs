@@ -133,7 +133,7 @@ fn run_loop(tui: &mut Tui, app: &mut App, yes: bool) -> anyhow::Result<()> {
                 // active, Esc cancels input (handled in the input branch) rather
                 // than quitting — so only quit on Esc when no mode is active.
                 match key.code {
-                    KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Char('q') if app.mode().is_none() => return Ok(()),
                     KeyCode::Esc if app.mode().is_none() => return Ok(()),
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                     _ => {}
