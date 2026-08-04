@@ -18,6 +18,10 @@ clap.workspace = true
 # fixed by Cargo.lock (currently 4.6.8). Bump deliberately; users then relaunch
 # their shell (the install regenerates the shim on each startup).
 clap_complete.workspace = true
+ratatui.workspace = true
+# ratatui 0.30's backend resolves to crossterm 0.29 by default; we import crossterm
+# via the `ratatui::crossterm` re-export so event/Command types match the backend.
+crossterm.workspace = true
 toml.workspace = true
 
 [package.metadata.binstall]
