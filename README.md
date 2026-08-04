@@ -331,6 +331,12 @@ requires `--yes` or an interactive confirm and is **refused** in non-interactive
 contexts; **work loss** (`stop`/`stop-all`/`rm`/`config --edit` recreate) warns
 only when a live session would be ended. `--yes`/`-y` skips all prompts.
 
+## Troubleshooting
+
+If the dashboard ever leaves your terminal in a broken state (e.g. a forced
+kill mid-session), run `stty sane` (or `reset`) to restore line discipline
+and echo.
+
 ## Configuration
 
 Non-secret metadata lives under `~/.config/work/`:

@@ -174,23 +174,39 @@ fn run_loop(
                     match key.code {
                         KeyCode::Char(c) => app.buf_push(c),
                         KeyCode::Backspace => app.buf_pop(),
-                        KeyCode::Enter => {
-                            let name = app.buf_take();
-                            app.cancel_mode();
-                            if let Err(e) = work_core::naming::validate_name(&name) {
-                                app.set_status(format!("invalid name: {e}"));
-                            } else {
-                                app.request_create(name);
-                                return Ok(()); // create+attach after teardown
+                        KeyCode::Enter => match app.mode() {
+                            Some(app::Mode::Filter) => {
+                                let f = app.buf_take();
+                                app.cancel_mode();
+                                app.set_filter(Some(f));
                             }
-                        }
-                        KeyCode::Esc => app.cancel_mode(),
+                            Some(app::Mode::New) => {
+                                let name = app.buf_take();
+                                app.cancel_mode();
+                                if let Err(e) = work_core::naming::validate_name(&name) {
+                                    app.set_status(format!("invalid name: {e}"));
+                                } else {
+                                    app.request_create(name);
+                                    return Ok(()); // create+attach after teardown
+                                }
+                            }
+                            None => {}
+                        },
+                        KeyCode::Esc => match app.mode() {
+                            Some(app::Mode::Filter) => {
+                                app.cancel_mode();
+                                app.set_filter(None);
+                            }
+                            _ => app.cancel_mode(),
+                        },
                         _ => {}
                     }
                 } else {
                     // `n` starts a new workspace (needs no selection).
                     if key.code == KeyCode::Char('n') {
                         app.enter_mode(app::Mode::New);
+                    } else if key.code == KeyCode::Char('/') {
+                        app.enter_mode(app::Mode::Filter);
                     } else if key.code == KeyCode::Char('r') {
                         match load_model() {
                             Ok(m) => {

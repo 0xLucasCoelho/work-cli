@@ -25,10 +25,11 @@ pub(crate) enum PendingAction { Attach(String), Create(String), NewTab(String) }
 /// Inline text-input sub-mode (e.g. entering a new-workspace name). While `Some`
 /// the event loop intercepts text keys instead of normal navigation.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Mode { New }
+pub(crate) enum Mode { New, Filter }
 pub(crate) struct App {
     model: Vec<WorkspaceStatus>,
     selected: Option<String>, // workspace NAME under the cursor
+    filter: Option<String>, // active name substring filter, if any (None = show all)
     quit: bool,
     status: Option<String>,
     confirm: Option<Confirm>, // pending destructive-op confirm (s/x/d gate)
@@ -44,6 +45,7 @@ impl App {
         Self {
             model: Vec::new(),
             selected: None,
+            filter: None,
             quit: false,
             status: None,
             pending: None,
@@ -83,22 +85,53 @@ impl App {
 
     pub(crate) fn model(&self) -> &[WorkspaceStatus] { &self.model }
 
-    fn cursor_index(&self) -> Option<usize> {
-        self.selected.as_deref().and_then(|n| self.model.iter().position(|w| &w.name == n))
+    /// Set (or clear) the substring filter. An empty string clears it (no filter).
+    pub(crate) fn set_filter(&mut self, f: Option<String>) {
+        self.filter = f.filter(|s| !s.is_empty());
+    }
+
+    pub(crate) fn filter_active(&self) -> bool { self.filter.is_some() }
+
+    /// Names currently shown (filtered by substring, else all), in model order.
+    pub(crate) fn visible_names(&self) -> Vec<String> {
+        match &self.filter {
+            None => self.model.iter().map(|w| w.name.clone()).collect(),
+            Some(f) => self
+                .model
+                .iter()
+                .filter(|w| w.name.contains(f))
+                .map(|w| w.name.clone())
+                .collect(),
+        }
     }
 
     pub(crate) fn move_up(&mut self) {
-        if let Some(i) = self.cursor_index().filter(|&i| i > 0) {
-            self.selected = Some(self.model[i - 1].name.clone());
-        }
+        let names = self.visible_names();
+        if names.is_empty() { return; }
+        let next = match self
+            .selected
+            .as_deref()
+            .and_then(|n| names.iter().position(|x| x == n))
+        {
+            None | Some(0) => 0,
+            Some(i) => i - 1,
+        };
+        self.selected = Some(names[next].clone());
     }
 
     pub(crate) fn move_down(&mut self) {
-        if let Some(i) = self.cursor_index() {
-            if i + 1 < self.model.len() {
-                self.selected = Some(self.model[i + 1].name.clone());
-            }
-        }
+        let names = self.visible_names();
+        if names.is_empty() { return; }
+        let last = names.len() - 1;
+        let next = match self
+            .selected
+            .as_deref()
+            .and_then(|n| names.iter().position(|x| x == n))
+        {
+            None => 0,
+            Some(i) => (i + 1).min(last),
+        };
+        self.selected = Some(names[next].clone());
     }
 
     pub(crate) fn quit(&mut self) { self.quit = true; }
@@ -210,5 +243,65 @@ mod tests {
         assert_eq!(app.expanded_tabs().map(|t| t.len()), Some(1));
         app.toggle_expand(); // collapses
         assert_eq!(app.expanded_name(), None);
+    }
+
+    #[test]
+    fn visible_names_all_when_no_filter() {
+        let mut app = App::new();
+        app.set_model(vec![ws("acme"), ws("blog"), ws("infra")]);
+        assert_eq!(app.visible_names(), vec!["acme", "blog", "infra"]);
+        assert!(!app.filter_active());
+    }
+
+    #[test]
+    fn filter_narrows_visible_names_by_substring() {
+        let mut app = App::new();
+        app.set_model(vec![ws("alpha"), ws("beta"), ws("gamma"), ws("delta")]);
+        app.set_filter(Some("e".into()));
+        // case-sensitive substring: only "beta"/"delta" contain 'e'
+        assert_eq!(app.visible_names(), vec!["beta", "delta"]);
+        assert!(app.filter_active());
+    }
+
+    #[test]
+    fn set_filter_empty_clears_filter() {
+        let mut app = App::new();
+        app.set_model(vec![ws("acme"), ws("blog")]);
+        app.set_filter(Some("acme".into()));
+        assert!(app.filter_active());
+        app.set_filter(Some(String::new())); // empty -> no filter
+        assert!(!app.filter_active());
+        assert_eq!(app.visible_names(), vec!["acme", "blog"]);
+        app.set_filter(Some("a".into()));
+        app.set_filter(None); // None -> no filter
+        assert!(!app.filter_active());
+    }
+
+    #[test]
+    fn move_navigates_visible_set_and_clamps_at_edges() {
+        let mut app = App::new();
+        app.set_model(vec![ws("alpha"), ws("beta"), ws("gamma"), ws("delta")]);
+        app.set_filter(Some("e".into())); // visible: beta, delta
+        // selection starts on the first model item (alpha), which is filtered out.
+        app.move_down(); // snaps to the first visible item (beta)
+        assert_eq!(app.selected_name(), Some("beta"));
+        app.move_down(); // beta -> delta
+        assert_eq!(app.selected_name(), Some("delta"));
+        app.move_down(); // bottom edge: stays on delta
+        assert_eq!(app.selected_name(), Some("delta"));
+        app.move_up(); // delta -> beta
+        assert_eq!(app.selected_name(), Some("beta"));
+        app.move_up(); // top edge: stays on beta
+        assert_eq!(app.selected_name(), Some("beta"));
+    }
+
+    #[test]
+    fn move_snaps_to_visible_when_selection_filtered_out() {
+        let mut app = App::new();
+        app.set_model(vec![ws("acme"), ws("blog"), ws("infra")]);
+        app.move_down(); app.move_down(); // infra
+        app.set_filter(Some("blog".into())); // only blog visible
+        app.move_up(); // infra is filtered out -> snap to the only visible item
+        assert_eq!(app.selected_name(), Some("blog"));
     }
 }
