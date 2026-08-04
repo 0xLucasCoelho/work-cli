@@ -68,6 +68,27 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
         );
     }
 
+    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    // Background refresh worker: ~3 s cadence. Stops on the shared quit flag
+    // (checked every 100 ms) or when the receiver is dropped (send error). A
+    // refresh ERROR flows as `Err` over the channel so the UI keeps the last
+    // good model and shows a transient status — the list is never blanked.
+    let (tx, rx) = mpsc::channel::<Result<Vec<work_core::workspace::WorkspaceStatus>, String>>();
+    let quit = Arc::new(AtomicBool::new(false));
+    let quit_w = quit.clone();
+    std::thread::spawn(move || {
+        while !quit_w.load(Ordering::Relaxed) {
+            let msg = work_core::workspace::list_all().map_err(|e| format!("{e}"));
+            if tx.send(msg).is_err() { return; } // receiver gone -> exit
+            for _ in 0..30 { // ~3 s, checking quit every 100 ms for prompt exit
+                if quit_w.load(Ordering::Relaxed) { return; }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    });
+
     // Scope the TUI guard so its `Drop` restores the terminal (raw mode off, alt
     // screen left, cursor shown) BEFORE we attach — `attach` spawns an interactive
     // shell that needs a normal TTY. `Drop` fires on early `?` return too, so the
@@ -77,9 +98,11 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
         let mut app = App::new();
         app.set_model(load_model()?);
         refresh_tabs(&mut app)?;
-        run_loop(&mut tui, &mut app, yes)?;
+        run_loop(&mut tui, &mut app, yes, &rx)?;
         app.pending().take()
     };
+    // Stop the background refresh worker (it also exits when `rx` drops on return).
+    quit.store(true, Ordering::Relaxed);
     match pending {
         Some(app::PendingAction::Attach(n)) => commands::attach(&n)?,
         Some(app::PendingAction::NewTab(n)) => commands::tab(&n, None)?,
@@ -89,12 +112,20 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_loop(tui: &mut Tui, app: &mut App, yes: bool) -> anyhow::Result<()> {
+fn run_loop(
+    tui: &mut Tui,
+    app: &mut App,
+    yes: bool,
+    rx: &std::sync::mpsc::Receiver<Result<Vec<work_core::workspace::WorkspaceStatus>, String>>,
+) -> anyhow::Result<()> {
     use work_core::safety::Severity;
     use work_core::workspace::Workspace;
     use self::app::ConfirmAction;
     const TICK: Duration = Duration::from_millis(250);
     loop {
+        // Drain any background refresh updates before drawing so each frame
+        // renders the freshest model.
+        drain_refresh(rx, app);
         tui.draw(|f| render::render(f, app))?;
         if !poll(TICK)? {
             continue; // background-refresh worker wires here in Task 4.3
@@ -160,6 +191,15 @@ fn run_loop(tui: &mut Tui, app: &mut App, yes: bool) -> anyhow::Result<()> {
                     // `n` starts a new workspace (needs no selection).
                     if key.code == KeyCode::Char('n') {
                         app.enter_mode(app::Mode::New);
+                    } else if key.code == KeyCode::Char('r') {
+                        match load_model() {
+                            Ok(m) => {
+                                app.set_model(m);
+                                let _ = refresh_tabs(app);
+                                app.set_status("refreshed");
+                            }
+                            Err(e) => app.set_status(format!("refresh failed: {e}")),
+                        }
                     } else if let Some(name) = app.selected_name().map(str::to_string) {
                         match key.code {
                             KeyCode::Down | KeyCode::Char('j') => app.move_down(),
@@ -230,6 +270,24 @@ fn gate(
 
 fn load_model() -> anyhow::Result<Vec<work_core::workspace::WorkspaceStatus>> {
     work_core::workspace::list_all()
+}
+
+/// Drain all pending background-refresh messages: `Ok` reconciles the model
+/// (name-keyed, so selection survives) and refreshes tabs; `Err` keeps the last
+/// good model and surfaces a transient status — the list is never blanked.
+fn drain_refresh(
+    rx: &std::sync::mpsc::Receiver<Result<Vec<work_core::workspace::WorkspaceStatus>, String>>,
+    app: &mut App,
+) {
+    while let Ok(msg) = rx.try_recv() {
+        match msg {
+            Ok(model) => {
+                app.set_model(model);
+                let _ = refresh_tabs(app);
+            }
+            Err(_) => app.set_status("refresh failed — showing last state"),
+        }
+    }
 }
 
 /// Fetch tabs for the expanded workspace (if any) via `Workspace::windows()`.
