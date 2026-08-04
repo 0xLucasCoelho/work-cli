@@ -9,6 +9,7 @@ use clap_complete::engine::{ArgValueCompleter, SubcommandCandidates};
 
 mod commands;
 mod completion;
+mod tui;
 use commands::NewArgs;
 
 #[derive(Parser)]
