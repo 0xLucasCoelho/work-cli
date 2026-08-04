@@ -3,6 +3,9 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use clap::CommandFactory;
+use clap_complete::CompleteEnv;
+use clap_complete::engine::{ArgValueCompleter, SubcommandCandidates};
 
 mod commands;
 mod completion;
@@ -13,7 +16,8 @@ use commands::NewArgs;
     name = "work",
     version,
     about = "Isolated multi-context session manager — one persistent Linux container per workspace",
-    after_help = "Tip: a bare `work <ws>` attaches to (or creates) that workspace's persistent in-container session. Use `work help <command>` for per-command details."
+    after_help = "Tip: a bare `work <ws>` attaches to (or creates) that workspace's persistent in-container session. Use `work help <command>` for per-command details.",
+    add = SubcommandCandidates::new(completion::workspace_subcommand_candidates),
 )]
 struct Cli {
     /// Skip all destructive-operation confirmations (script-friendly).
@@ -42,6 +46,7 @@ enum Command {
     /// Start a workspace container (creates it from config if missing).
     Start {
         /// Workspace to start.
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
         name: String,
     },
     /// Stop a workspace container.
@@ -50,6 +55,7 @@ enum Command {
     /// volume persist. Warns (and asks) if a live session would be ended.
     Stop {
         /// Workspace to stop.
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
         name: String,
     },
     /// Stop every workspace.
@@ -73,6 +79,7 @@ enum Command {
     ///   work fwd acme 8080
     Fwd {
         /// Workspace to forward into.
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
         ws: String,
         /// Port to bridge (used on both host and container).
         port: u16,
@@ -88,6 +95,7 @@ enum Command {
     ///   work browse acme
     Browse {
         /// Workspace whose browser-open requests to forward.
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
         ws: String,
     },
     /// Show a workspace's (non-secret) config; use --edit to open it in $EDITOR.
@@ -96,6 +104,7 @@ enum Command {
     /// the container if the image changed (gated by the safety policy).
     Config {
         /// Workspace whose config to show or edit.
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
         ws: String,
         /// Open the config in $EDITOR (default vi), then re-apply/recreate.
         #[arg(long)]
@@ -118,6 +127,7 @@ enum Command {
     /// Examples: `work tab acme`; `work tab acme --name build`.
     Tab {
         /// Workspace to open a new tab in.
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
         ws: String,
         /// Name the new tmux window (default: auto, shows the running command).
         #[arg(long)]
@@ -131,6 +141,7 @@ enum Command {
     /// Example: `work tabs acme`.
     Tabs {
         /// Workspace whose tabs to list.
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
         ws: String,
     },
     /// Remove a workspace: container + network + config.
@@ -142,6 +153,7 @@ enum Command {
     /// Examples: `work rm acme` keeps the volume; `work rm acme --purge -y` deletes it too.
     Rm {
         /// Workspace to remove.
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
         ws: String,
         /// Also delete the named volume (irreversible; requires --yes).
         #[arg(long)]
@@ -213,6 +225,9 @@ fn normalize_help_arg(raw: Vec<String>) -> Vec<String> {
 }
 
 fn main() -> Result<ExitCode> {
+    // Dynamic completion entry point. Reads args_os() directly and exit(0)s when
+    // COMPLETE=<shell> is set; returns immediately otherwise. Must run first.
+    CompleteEnv::with_factory(|| Cli::command()).complete();
     let raw: Vec<String> = std::env::args().skip(1).collect();
     // Normalize `work <cmd> help` -> `work help <cmd>` so the trailing-help form
     // works (clap only natively does `work help <cmd>` / `work <cmd> --help`).
