@@ -3,7 +3,7 @@
 /// Reserved tokens — equal to a CLI verb, so they cannot also be a workspace name.
 pub const RESERVED: &[&str] = &[
     "new", "all", "browse", "ls", "start", "stop", "fwd", "config", "image", "doctor", "help",
-    "version", "rm",
+    "version", "rm", "tab", "tabs",
 ];
 
 pub fn volume(ws: &str) -> String {

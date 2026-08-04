@@ -119,6 +119,24 @@ state in the volume persist) or `work rm`.
 - **Reattach:** `work <ws>` again.
 - **Close the session:** `exit` at its prompt.
 
+### Opening more tabs (`work tab`)
+
+`work <ws>` resumes into the *existing* session (where you left off). To open an
+**additional** terminal tab in the same workspace — each its own persistent tmux
+window — use `work tab`:
+
+```bash
+work tab acme                # open a new tab in `acme` and attach to it
+work tab acme --name build   # ...named "build" (shows in `work tabs` / the tmux bar)
+work tabs acme               # list the workspace's tabs (index, name, panes, active, cmd)
+```
+
+Each tab is a tmux window in the one in-container session: it survives closing
+the terminal (detach) but not `work stop`. Switch tabs inside an attached session
+with `Ctrl-b <idx>` (or `Ctrl-b n` / `Ctrl-b p`). Opening a tab makes it the
+session's active window, so other attached terminals move to it too — a tmux
+session shares one active window across clients (same as `Ctrl-b c`).
+
 ## The cockpit (`work resume`)
 
 `work resume` (alias: `work all`) opens one **host** tmux session with a window
@@ -274,6 +292,8 @@ work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 |---|---|
 | `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-tmux-config [<path>]`, `--import-starship-config [<path>]`, `--import-dotfiles <dir>`, `--default`. |
 | `work <ws>` | Attach to (or create) the persistent in-container session. `Ctrl-b d` detaches. |
+| `work tab <ws> [--name <n>]` | Open a new tmux window ("tab") in the workspace's session and attach. Each call = one persistent window; becomes the session's active window. |
+| `work tabs <ws>` | List the workspace's tmux windows (index, name, panes, active, command). |
 | `work ls` | List workspaces with state and session liveness (`live`/`—`). |
 | `work start <ws>` / `work stop <ws>` | Lifecycle. `stop` ends the session (warns if one is live). |
 | `work stop-all` | Stop every workspace. |

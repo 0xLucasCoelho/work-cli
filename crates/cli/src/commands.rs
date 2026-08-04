@@ -52,6 +52,17 @@ pub fn shell(name: &str) -> Result<()> {
     let ws = Workspace::open(name)?;
     ws.shell()
 }
+/// `work tab <ws> [--name <n>]`: open a new in-container tmux window and attach.
+pub fn tab(ws: &str, name: Option<&str>) -> Result<()> {
+    let ws = Workspace::open(ws)?;
+    ws.tab(name)
+}
+
+/// `work tabs <ws>`: list the in-container tmux windows ("tabs").
+pub fn tabs(ws: &str) -> Result<()> {
+    let ws = Workspace::open(ws)?;
+    ws.list_tabs()
+}
 
 pub fn start(name: &str) -> Result<()> {
     let ws = Workspace::open(name)?;

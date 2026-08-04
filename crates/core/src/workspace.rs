@@ -236,17 +236,8 @@ impl Workspace {
             println!("Ctrl-b d or close terminal = detach (keeps running) · exit = close session");
         }
 
-        // Lossless one-time migration: rename a stale `work` session to <ws> in
-        // place (running shells/agents inside it survive). No-op once renamed, or
-        // for a workspace literally named "work".
-        if session != "work"
-            && self.engine.session_exists(&ctr, "work").unwrap_or(false)
-            && !self.engine.session_exists(&ctr, session).unwrap_or(false)
-        {
-            let _ = self
-                .engine
-                .exec_capture(&ctr, &["tmux", "rename-session", "-t", "work", session]);
-        }
+        // Lossless one-time migration: rename a stale `work` session to <ws>.
+        self.migrate_session_name(&ctr, session);
 
         // Name the terminal tab (best-effort). The tmux window name is set via -n.
         {
@@ -270,6 +261,171 @@ impl Workspace {
                 "-l",
             ],
         )
+    }
+    /// Lossless one-time migration: rename a stale `work` session to <ws> in
+    /// place (running shells/agents inside it survive). No-op once renamed, or
+    /// for a workspace literally named "work". Shared by `shell()` and `tab()`.
+    fn migrate_session_name(&self, ctr: &str, session: &str) {
+        if session != "work"
+            && self.engine.session_exists(ctr, "work").unwrap_or(false)
+            && !self.engine.session_exists(ctr, session).unwrap_or(false)
+        {
+            let _ = self
+                .engine
+                .exec_capture(ctr, &["tmux", "rename-session", "-t", "work", session]);
+        }
+    }
+
+    /// `work tab <ws> [--name <n>]`: open a NEW tmux window ("tab") in the
+    /// workspace's session and attach to it. Each call = one persistent window
+    /// that survives detach / closing the terminal (not `work stop`). Creates
+    /// the session if it is missing. The new window becomes the session's active
+    /// window so the attaching client lands in it; a tmux session shares one
+    /// active window across clients (as `Ctrl-b c` does), so other attached
+    /// terminals move to it too.
+    pub fn tab(&self, name: Option<&str>) -> Result<()> {
+        self.ensure_running()?;
+        let ctr = naming::container(&self.cfg.name);
+        let shell = self.cfg.shell.as_deref().unwrap_or("zsh");
+        let session = naming::session(&self.cfg.name);
+
+        if let Some(n) = name {
+            validate_window_name(n)?;
+        }
+        self.migrate_session_name(&ctr, session);
+
+        // Banner + detach hint (suppressed in cockpit windows).
+        if std::env::var_os("WORK_COCKPIT").is_none() {
+            let show = config::load_global().map(|g| g.show_banner).unwrap_or(true);
+            if show {
+                self.print_banner(&ctr);
+            }
+            println!(
+                "Ctrl-b d or close terminal = detach (keeps running) · exit = close this tab"
+            );
+        }
+
+        // Name the host terminal tab (best-effort).
+        {
+            use std::io::Write;
+            print!("\x1b]0;work:{}\x07", self.cfg.name);
+            let _ = std::io::stdout().flush();
+        }
+
+        if !self.engine.session_exists(&ctr, session).unwrap_or(false) {
+            // Session missing: create it detached with THIS window (the tab),
+            // named after the workspace (or the explicit --name), then attach.
+            let win_name = name.unwrap_or(session);
+            self.engine
+                .exec_capture(
+                    &ctr,
+                    &[
+                        "tmux", "new-session", "-d", "-s", session, "-n", win_name, "--", shell,
+                        "-l",
+                    ],
+                )
+                .context("creating in-container session")?;
+            self.engine
+                .exec_interactive(&ctr, &["tmux", "attach", "-t", session])?;
+        } else {
+            // Session exists: append a window after the LAST window
+            // (`-a -t <session>:$`) so indices stay monotonic. `-P -F` prints the
+            // new window's index, which we attach to (making it the active window).
+            // Bare `-t <session>` would place the window *before* the active window
+            // and collide on its index (confirmed on tmux 3.4).
+            let last = format!("{session}:$");
+            let cmd: &[&str] = if let Some(n) = name {
+                &[
+                    "tmux", "new-window", "-d", "-a", "-P", "-F", "#{window_index}", "-t",
+                    last.as_str(), "-n", n, "--", shell, "-l",
+                ]
+            } else {
+                &[
+                    "tmux", "new-window", "-d", "-a", "-P", "-F", "#{window_index}", "-t",
+                    last.as_str(), "--", shell, "-l",
+                ]
+            };
+            let idx = self
+                .engine
+                .exec_capture(&ctr, cmd)
+                .context("creating in-container tmux window")?;
+            let target = if idx.is_empty() {
+                session.to_string()
+            } else {
+                format!("{session}:{idx}")
+            };
+            self.engine
+                .exec_interactive(&ctr, &["tmux", "attach", "-t", target.as_str()])?;
+        }
+        Ok(())
+    }
+
+    /// `work tabs <ws>`: list the tmux windows ("tabs") in the workspace's
+    /// session — index, name, pane count, active marker, current command.
+    /// Read-only and graceful: a stopped/missing container or absent session
+    /// prints a hint instead of erroring.
+    pub fn list_tabs(&self) -> Result<()> {
+        let ctr = naming::container(&self.cfg.name);
+        let session = naming::session(&self.cfg.name);
+
+        match self.engine.container_state(&ctr)? {
+            ContainerState::Missing => {
+                println!(
+                    "workspace '{}' has no container (run `work new {}`)",
+                    self.cfg.name, self.cfg.name
+                );
+                return Ok(());
+            }
+            ContainerState::Stopped => {
+                println!(
+                    "workspace '{}' is stopped (run `work {}` to start its session)",
+                    self.cfg.name, self.cfg.name
+                );
+                return Ok(());
+            }
+            ContainerState::Running => {}
+        }
+
+        if !self.engine.session_exists(&ctr, session)? {
+            println!(
+                "no live session in '{}' (run `work {}` to start one)",
+                self.cfg.name, self.cfg.name
+            );
+            return Ok(());
+        }
+
+        let out = self.engine.exec_capture(
+            &ctr,
+            &[
+                "tmux",
+                "list-windows",
+                "-t",
+                session,
+                "-F",
+                "#{window_index}\t#{window_name}\t#{window_panes}\t#{window_active}\t#{pane_current_command}",
+            ],
+        )?;
+        let rows: Vec<WindowRow> = out.lines().filter_map(parse_window_line).collect();
+
+        if rows.is_empty() {
+            println!("no windows in session '{}'", self.cfg.name);
+            return Ok(());
+        }
+
+        println!("Tabs in '{}' (session live):\n", self.cfg.name);
+        println!("  IDX  NAME             PANES  ACTIVE  CMD");
+        for row in &rows {
+            let mark = if row.active { "*" } else { "" };
+            println!(
+                "  {:>3}  {:<16} {:>5}  {:<6}  {}",
+                row.index, row.name, row.panes, mark, row.command
+            );
+        }
+        println!(
+            "\nOpen another: `work tab {} [--name <n>]`   ·   switch: Ctrl-b <idx>",
+            self.cfg.name
+        );
+        Ok(())
     }
 
     /// Gather hostname/OS/git-branch via one `docker exec` and print the banner.
@@ -718,12 +874,19 @@ set -ga terminal-overrides ",*256col*:Tc"
 set -ag update-environment " COLORTERM NERD_FONTS"
 # Vim/agent friendly: don't delay Esc.
 set -sg escape-time 10
+# OSC 52 clipboard sync: copy-mode selections (and inner apps that yank via
+# OSC 52, e.g. nvim) land on the host clipboard. `work <ws>` attaches through a
+# transparent PTY (docker exec -it ... tmux), so escapes reach the host
+# terminal (Ghostty allows clipboard writes by default). `on` lets inner apps
+# set it too; Ms is auto-present for xterm* (container TERM is xterm-256color).
+set -s set-clipboard on
+set -as terminal-features ",xterm*:clipboard"
 "#;
 
 /// Ensure `/home/dev/.tmux.conf` exists. If a tmux config was imported (or a
 /// dotfiles tree provided one) it is already present — never overwrite. If
 /// nothing was imported and the file is absent, write a minimal default that
-/// enables 256-color + truecolor so TUI agents render correctly inside the
+/// enables 256-color + truecolor + OSC 52 clipboard sync so TUI agents render correctly inside the
 /// in-container tmux session.
 fn ensure_default_tmux_conf(engine: &dyn Engine, ctr: &str, imported: bool) -> Result<()> {
     let path = "/home/dev/.tmux.conf";
@@ -746,6 +909,44 @@ fn ensure_default_tmux_conf(engine: &dyn Engine, ctr: &str, imported: bool) -> R
 fn now_rfc3339() -> String {
     use chrono::Utc;
     Utc::now().to_rfc3339()
+}
+/// Validate a tmux window ("tab") name. Reject empty (after trim), the tmux
+/// target separator `:`, and control characters. PURE.
+fn validate_window_name(name: &str) -> Result<()> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        bail!("tab name cannot be empty");
+    }
+    if trimmed.contains(':') {
+        bail!("tab name cannot contain ':' (tmux uses it as a target separator)");
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        bail!("tab name cannot contain control characters");
+    }
+    Ok(())
+}
+
+/// One parsed row of `tmux list-windows -F` output. PURE (built by
+/// `parse_window_line`).
+struct WindowRow {
+    index: String,
+    name: String,
+    panes: String,
+    active: bool,
+    command: String,
+}
+
+/// Parse one `tmux list-windows -F` line (TSV: index, name, panes, active,
+/// command). PURE. Returns None on a malformed (under-long) line.
+fn parse_window_line(line: &str) -> Option<WindowRow> {
+    let mut f = line.split('\t');
+    Some(WindowRow {
+        index: f.next()?.to_string(),
+        name: f.next()?.to_string(),
+        panes: f.next()?.to_string(),
+        active: f.next()? == "1",
+        command: f.next()?.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -788,5 +989,48 @@ mod tests {
         // And re-pick up the forwarded COLORTERM on attach so apps detect
         // truecolor without a tmux server restart.
         assert!(TMUX_CONF_DEFAULT.contains("COLORTERM"));
+    }
+    #[test]
+    fn default_tmux_conf_enables_clipboard() {
+        // OSC 52 sync: copy-mode selections (and inner apps that yank via OSC 52,
+        // e.g. nvim) must reach the host clipboard over the transparent `work`
+        // attach PTY. `on` (not `external`) so inner apps can set it too.
+        assert!(TMUX_CONF_DEFAULT.contains("set -s set-clipboard on"));
+        assert!(TMUX_CONF_DEFAULT.contains(":clipboard"));
+    }
+    #[test]
+    fn validate_window_name_rules() {
+        assert!(validate_window_name("build").is_ok());
+        assert!(validate_window_name("  ok-name  ").is_ok()); // trimmed
+        // empty / whitespace-only
+        assert!(validate_window_name("").is_err());
+        assert!(validate_window_name("   ").is_err());
+        // tmux target separator
+        assert!(validate_window_name("a:b").is_err());
+        // control characters (tab / newline, even mid-name)
+        assert!(validate_window_name("a\tb").is_err());
+        assert!(validate_window_name("a\nb").is_err());
+    }
+
+    #[test]
+    fn parse_window_line_fields() {
+        let row = parse_window_line("2\tbuild\t3\t0\tnpm").unwrap();
+        assert_eq!(row.index, "2");
+        assert_eq!(row.name, "build");
+        assert_eq!(row.panes, "3");
+        assert!(!row.active);
+        assert_eq!(row.command, "npm");
+    }
+
+    #[test]
+    fn parse_window_line_active_marker() {
+        let row = parse_window_line("0\tacme\t1\t1\tzsh").unwrap();
+        assert!(row.active);
+    }
+
+    #[test]
+    fn parse_window_line_rejects_malformed() {
+        assert!(parse_window_line("").is_none());
+        assert!(parse_window_line("only\ttwo").is_none());
     }
 }

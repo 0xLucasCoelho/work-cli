@@ -28,6 +28,12 @@ The first public release. Not yet tagged — see
 ### Added — workflow layer (sessions)
 - `work resume` (= `work all`) — **cockpit**: tile every running session in one
   host tmux (prefix `Ctrl-a`, distinct from the in-container `Ctrl-b`).
+- `work tab <ws> [--name <n>]` — open a NEW tmux window ("tab") in the
+  workspace's session and attach to it. Each call = one persistent window that
+  survives closing the terminal (not `work stop`) and becomes the session's active
+  window. Bare `work <ws>` still resumes into the existing session.
+- `work tabs <ws>` — list the workspace's tmux windows (index, name, panes,
+  active marker, current command).
 - Familiarity: host-shell auto-detection (`$SHELL`, clamped to `zsh`/`bash`),
   opt-in `--import-shell-config [<path>]` / `--import-tmux-config [<path>]`
   (verbatim, owned by `dev`, with a secret-free warning), optional global default.

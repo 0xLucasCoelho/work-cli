@@ -106,6 +106,32 @@ enum Command {
         #[command(subcommand)]
         action: ImageCmd,
     },
+    /// Open a new tmux window ("tab") in a workspace's session and attach to it.
+    ///
+    /// Each run opens one persistent window that survives closing the terminal
+    /// (not `work stop`). Bare `work <ws>` still attaches/resumes into the
+    /// existing session; `work tab <ws>` always opens a fresh one. The new tab
+    /// becomes the session's active window (other attached clients move to it too,
+    /// as with `Ctrl-b c`).
+    ///
+    /// Examples: `work tab acme`; `work tab acme --name build`.
+    Tab {
+        /// Workspace to open a new tab in.
+        ws: String,
+        /// Name the new tmux window (default: auto, shows the running command).
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List the tmux windows ("tabs") in a workspace's session.
+    ///
+    /// Read-only: index, name, pane count, active marker, current command.
+    /// Prints a hint if the container is stopped or has no live session.
+    ///
+    /// Example: `work tabs acme`.
+    Tabs {
+        /// Workspace whose tabs to list.
+        ws: String,
+    },
     /// Remove a workspace: container + network + config.
     ///
     /// Keeps the named volume by default (data-safe) — `work new <ws>` then
@@ -163,6 +189,8 @@ const RESERVED: &[&str] = &[
     "start",
     "stop",
     "stop-all",
+    "tab",
+    "tabs",
     "resume",
     "rm",
     "fwd",
@@ -252,6 +280,8 @@ fn main() -> Result<ExitCode> {
                 commands::image_init(output.as_deref())?;
             }
         },
+        Some(Command::Tab { ws, name }) => commands::tab(&ws, name.as_deref())?,
+        Some(Command::Tabs { ws }) => commands::tabs(&ws)?,
         Some(Command::Rm { ws, purge }) => commands::rm(&ws, purge, cli.yes)?,
         Some(Command::Doctor) => {
             return commands::doctor();
