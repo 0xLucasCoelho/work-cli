@@ -76,6 +76,7 @@ pub(crate) fn run(_yes: bool) -> anyhow::Result<()> {
         let mut tui = Tui::enter()?;
         let mut app = App::new();
         app.set_model(load_model()?);
+        refresh_tabs(&mut app)?;
         run_loop(&mut tui, &mut app)?;
         app.pending_attach().take()
     };
@@ -100,7 +101,10 @@ fn run_loop(tui: &mut Tui, app: &mut App) -> anyhow::Result<()> {
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                     KeyCode::Down | KeyCode::Char('j') => app.move_down(),
                     KeyCode::Up | KeyCode::Char('k') => app.move_up(),
-                    KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => app.toggle_expand(),
+                    KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => {
+                        app.toggle_expand();
+                        refresh_tabs(app)?;
+                    }
                     KeyCode::Enter => {
                         if let Some(name) = app.selected_name() {
                             app.request_attach(name.to_string());
@@ -116,4 +120,19 @@ fn run_loop(tui: &mut Tui, app: &mut App) -> anyhow::Result<()> {
 
 fn load_model() -> anyhow::Result<Vec<work_core::workspace::WorkspaceStatus>> {
     work_core::workspace::list_all()
+}
+
+/// Fetch tabs for the expanded workspace (if any) via `Workspace::windows()`.
+/// Best-effort: a docker error just leaves the previously-known tabs (or none),
+/// never crashing the TUI.
+fn refresh_tabs(app: &mut App) -> anyhow::Result<()> {
+    let name = match app.expanded_name() {
+        Some(name) => name.to_string(),
+        None => return Ok(()),
+    };
+    if let Ok(ws) = work_core::workspace::Workspace::open(&name) {
+        let tabs = ws.windows().unwrap_or_default();
+        app.set_tabs(&name, tabs);
+    }
+    Ok(())
 }
