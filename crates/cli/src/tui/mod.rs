@@ -9,7 +9,9 @@ use std::io::{self, Stdout};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::{CompletedFrame, Frame, Terminal};
 
 mod app;
@@ -29,7 +31,9 @@ impl Tui {
         enable_raw_mode()?;
         execute!(io::stdout(), EnterAlternateScreen, Hide)?;
         let backend = CrosstermBackend::new(io::stdout());
-        Ok(Self { terminal: Terminal::new(backend)? })
+        Ok(Self {
+            terminal: Terminal::new(backend)?,
+        })
     }
 
     pub(crate) fn draw(&mut self, f: impl FnOnce(&mut Frame)) -> io::Result<CompletedFrame<'_>> {
@@ -68,8 +72,8 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
         );
     }
 
-    use std::sync::mpsc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
     use std::sync::Arc;
     // Background refresh worker: ~3 s cadence. Stops on the shared quit flag
     // (checked every 100 ms) or when the receiver is dropped (send error). A
@@ -81,9 +85,14 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
     std::thread::spawn(move || {
         while !quit_w.load(Ordering::Relaxed) {
             let msg = work_core::workspace::list_all().map_err(|e| format!("{e}"));
-            if tx.send(msg).is_err() { return; } // receiver gone -> exit
-            for _ in 0..30 { // ~3 s, checking quit every 100 ms for prompt exit
-                if quit_w.load(Ordering::Relaxed) { return; }
+            if tx.send(msg).is_err() {
+                return;
+            } // receiver gone -> exit
+            for _ in 0..30 {
+                // ~3 s, checking quit every 100 ms for prompt exit
+                if quit_w.load(Ordering::Relaxed) {
+                    return;
+                }
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
@@ -106,7 +115,9 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
     match pending {
         Some(app::PendingAction::Attach(n)) => commands::attach(&n)?,
         Some(app::PendingAction::NewTab(n)) => commands::tab(&n, None)?,
-        Some(app::PendingAction::Create(n)) => commands::new(&n, None, None, None, None, None, None, None, false)?,
+        Some(app::PendingAction::Create(n)) => {
+            commands::new(&n, None, None, None, None, None, None, None, false)?
+        }
         None => {}
     }
     Ok(())
@@ -118,9 +129,9 @@ fn run_loop(
     yes: bool,
     rx: &std::sync::mpsc::Receiver<Result<Vec<work_core::workspace::WorkspaceStatus>, String>>,
 ) -> anyhow::Result<()> {
+    use self::app::ConfirmAction;
     use work_core::safety::Severity;
     use work_core::workspace::Workspace;
-    use self::app::ConfirmAction;
     const TICK: Duration = Duration::from_millis(250);
     loop {
         // Drain any background refresh updates before drawing so each frame
@@ -131,14 +142,17 @@ fn run_loop(
             continue; // background-refresh worker wires here in Task 4.3
         }
         // Non-blocking drain: handle all ready events, then redraw.
-        loop {
-            let Ok(event) = read() else { break; };
+        while let Ok(event) = read() {
             let Event::Key(key) = event else {
-                if !poll(Duration::ZERO)? { break; }
+                if !poll(Duration::ZERO)? {
+                    break;
+                }
                 continue;
             };
             if key.kind != KeyEventKind::Press {
-                if !poll(Duration::ZERO)? { break; }
+                if !poll(Duration::ZERO)? {
+                    break;
+                }
                 continue;
             }
 
@@ -148,15 +162,21 @@ fn run_loop(
                     KeyCode::Char('y') | KeyCode::Enter => {
                         if let Some(c) = app.take_confirm() {
                             let r = match c.action {
-                                ConfirmAction::Stop => Workspace::open(&c.ws).and_then(|w| w.stop()),
-                                ConfirmAction::Remove => Workspace::open(&c.ws).and_then(|w| w.remove(false)),
+                                ConfirmAction::Stop => {
+                                    Workspace::open(&c.ws).and_then(|w| w.stop())
+                                }
+                                ConfirmAction::Remove => {
+                                    Workspace::open(&c.ws).and_then(|w| w.remove(false))
+                                }
                             };
                             app.set_status(result_msg(r, &c.ws, verb_for(c.action)));
                         }
                     }
                     KeyCode::Char('n') | KeyCode::Esc => app.cancel_confirm(),
                     KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Ok(())
+                    }
                     _ => {}
                 }
             } else {
@@ -166,7 +186,9 @@ fn run_loop(
                 match key.code {
                     KeyCode::Char('q') if app.mode().is_none() => return Ok(()),
                     KeyCode::Esc if app.mode().is_none() => return Ok(()),
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Ok(())
+                    }
                     _ => {}
                 }
                 // Inline text-input mode (e.g. new-workspace name entry).
@@ -232,8 +254,24 @@ fn run_loop(
                                 let r = Workspace::open(&name).and_then(|w| w.start());
                                 app.set_status(result_msg(r, &name, "started"));
                             }
-                            KeyCode::Char('x') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Stop, "Stop", |w| w.stop()),
-                            KeyCode::Char('d') => gate(app, &name, yes, Severity::WorkLoss, ConfirmAction::Remove, "Remove", |w| w.remove(false)),
+                            KeyCode::Char('x') => gate(
+                                app,
+                                &name,
+                                yes,
+                                Severity::WorkLoss,
+                                ConfirmAction::Stop,
+                                "Stop",
+                                |w| w.stop(),
+                            ),
+                            KeyCode::Char('d') => gate(
+                                app,
+                                &name,
+                                yes,
+                                Severity::WorkLoss,
+                                ConfirmAction::Remove,
+                                "Remove",
+                                |w| w.remove(false),
+                            ),
                             KeyCode::Char('t') => {
                                 app.request_tab(name);
                                 return Ok(()); // new tab + attach after teardown
@@ -243,17 +281,25 @@ fn run_loop(
                     }
                 }
             }
-            if !poll(Duration::ZERO)? { break; }
+            if !poll(Duration::ZERO)? {
+                break;
+            }
         }
     }
 }
 
 fn verb_for(a: self::app::ConfirmAction) -> &'static str {
-    match a { self::app::ConfirmAction::Stop => "stopped", self::app::ConfirmAction::Remove => "removed" }
+    match a {
+        self::app::ConfirmAction::Stop => "stopped",
+        self::app::ConfirmAction::Remove => "removed",
+    }
 }
 
 fn result_msg(r: anyhow::Result<()>, ws: &str, verb: &str) -> String {
-    match r { Ok(()) => format!("{ws}: {verb}"), Err(e) => format!("{ws}: {verb} failed: {e}") }
+    match r {
+        Ok(()) => format!("{ws}: {verb}"),
+        Err(e) => format!("{ws}: {verb} failed: {e}"),
+    }
 }
 
 /// Apply the destructive-op safety policy. Proceed runs now; Prompt queues an
@@ -269,7 +315,9 @@ fn gate(
 ) {
     use work_core::safety::{self, Action};
     use work_core::workspace::Workspace;
-    let live = Workspace::open(name).map(|w| w.has_live_session()).unwrap_or(false);
+    let live = Workspace::open(name)
+        .map(|w| w.has_live_session())
+        .unwrap_or(false);
     match safety::decide(severity, live, true, yes) {
         Action::Proceed => {
             let r = Workspace::open(name).and_then(|w| f(&w));
@@ -280,7 +328,9 @@ fn gate(
             action,
             blurb: format!("{verb} {name}? A live session will end. [y/N]"),
         }),
-        Action::Refuse => app.set_status(format!("{name}: {verb} refused (non-interactive; pass --yes)")),
+        Action::Refuse => app.set_status(format!(
+            "{name}: {verb} refused (non-interactive; pass --yes)"
+        )),
     }
 }
 

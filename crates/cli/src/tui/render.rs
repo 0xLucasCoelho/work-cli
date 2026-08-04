@@ -25,7 +25,9 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
     let mut items: Vec<ListItem> = Vec::new();
     let mut selected_idx: Option<usize> = None;
     for name in &visible {
-        let Some(w) = app.model().iter().find(|w| &w.name == name) else { continue; };
+        let Some(w) = app.model().iter().find(|w| &w.name == name) else {
+            continue;
+        };
         if Some(w.name.as_str()) == selected {
             selected_idx = Some(items.len());
         }
@@ -35,7 +37,10 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
             ContainerState::Stopped => "stopped",
             ContainerState::Missing => "missing",
         };
-        items.push(ListItem::new(Line::from(format!("{:<16} {:<8} {}", w.name, st, dot))));
+        items.push(ListItem::new(Line::from(format!(
+            "{:<16} {:<8} {}",
+            w.name, st, dot
+        ))));
 
         // When this workspace is the expanded one AND its tabs are loaded,
         // append an indented child row per tab beneath it. Tabs not loaded
@@ -44,7 +49,10 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
             if let Some(tabs) = app.expanded_tabs() {
                 for t in tabs {
                     let active = if t.active { " (active)" } else { "" };
-                    items.push(ListItem::new(Line::from(format!("    · {}{}", t.name, active))));
+                    items.push(ListItem::new(Line::from(format!(
+                        "    · {}{}",
+                        t.name, active
+                    ))));
                 }
             }
         }
@@ -70,7 +78,10 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
     } else if app.mode() == Some(super::app::Mode::Filter) {
         format!("filter: {}  (Enter=apply · Esc=clear)", app.buf_str())
     } else if app.mode() == Some(super::app::Mode::New) {
-        format!("new workspace: {}  (Enter=create · Esc=cancel)", app.buf_str())
+        format!(
+            "new workspace: {}  (Enter=create · Esc=cancel)",
+            app.buf_str()
+        )
     } else {
         app.status_message().unwrap_or(
             "Up/Dn move · Enter attach · s start · x stop · d rm · t tab · n new · / filter · r refresh · q/Ctrl-C quit"

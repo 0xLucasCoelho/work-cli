@@ -2,10 +2,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
 use clap::CommandFactory;
-use clap_complete::CompleteEnv;
+use clap::{Parser, Subcommand};
 use clap_complete::engine::{ArgValueCompleter, SubcommandCandidates};
+use clap_complete::CompleteEnv;
 
 mod commands;
 mod completion;
@@ -228,7 +228,7 @@ fn normalize_help_arg(raw: Vec<String>) -> Vec<String> {
 fn main() -> Result<ExitCode> {
     // Dynamic completion entry point. Reads args_os() directly and exit(0)s when
     // COMPLETE=<shell> is set; returns immediately otherwise. Must run first.
-    CompleteEnv::with_factory(|| Cli::command()).complete();
+    CompleteEnv::with_factory(Cli::command).complete();
     let raw: Vec<String> = std::env::args().skip(1).collect();
     // Normalize `work <cmd> help` -> `work help <cmd>` so the trailing-help form
     // works (clap only natively does `work help <cmd>` / `work <cmd> --help`).
@@ -244,7 +244,7 @@ fn main() -> Result<ExitCode> {
             use std::io::IsTerminal;
             let interactive = std::io::stdin().is_terminal()
                 && std::io::stdout().is_terminal()
-                && std::env::var_os("TERM").map_or(true, |t| t != "dumb");
+                && std::env::var_os("TERM").is_none_or(|t| t != "dumb");
             if interactive {
                 commands::dashboard(cli.yes)?;
             } else {
@@ -356,10 +356,19 @@ mod tests {
 
     #[test]
     fn named_subcommands_still_match() {
-        assert!(matches!(parse(&["new", "x"]).command, Some(Command::New(_))));
+        assert!(matches!(
+            parse(&["new", "x"]).command,
+            Some(Command::New(_))
+        ));
         assert!(matches!(parse(&["ls"]).command, Some(Command::Ls)));
-        assert!(matches!(parse(&["stop", "x"]).command, Some(Command::Stop { .. })));
-        assert!(matches!(parse(&["tab", "x"]).command, Some(Command::Tab { .. })));
+        assert!(matches!(
+            parse(&["stop", "x"]).command,
+            Some(Command::Stop { .. })
+        ));
+        assert!(matches!(
+            parse(&["tab", "x"]).command,
+            Some(Command::Tab { .. })
+        ));
     }
 
     #[test]

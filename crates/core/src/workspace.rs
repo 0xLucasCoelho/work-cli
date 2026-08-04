@@ -300,9 +300,7 @@ impl Workspace {
             if show {
                 self.print_banner(&ctr);
             }
-            println!(
-                "Ctrl-b d or close terminal = detach (keeps running) · exit = close this tab"
-            );
+            println!("Ctrl-b d or close terminal = detach (keeps running) · exit = close this tab");
         }
 
         // Name the host terminal tab (best-effort).
@@ -320,7 +318,15 @@ impl Workspace {
                 .exec_capture(
                     &ctr,
                     &[
-                        "tmux", "new-session", "-d", "-s", session, "-n", win_name, "--", shell,
+                        "tmux",
+                        "new-session",
+                        "-d",
+                        "-s",
+                        session,
+                        "-n",
+                        win_name,
+                        "--",
+                        shell,
                         "-l",
                     ],
                 )
@@ -336,13 +342,35 @@ impl Workspace {
             let last = format!("{session}:$");
             let cmd: &[&str] = if let Some(n) = name {
                 &[
-                    "tmux", "new-window", "-d", "-a", "-P", "-F", "#{window_index}", "-t",
-                    last.as_str(), "-n", n, "--", shell, "-l",
+                    "tmux",
+                    "new-window",
+                    "-d",
+                    "-a",
+                    "-P",
+                    "-F",
+                    "#{window_index}",
+                    "-t",
+                    last.as_str(),
+                    "-n",
+                    n,
+                    "--",
+                    shell,
+                    "-l",
                 ]
             } else {
                 &[
-                    "tmux", "new-window", "-d", "-a", "-P", "-F", "#{window_index}", "-t",
-                    last.as_str(), "--", shell, "-l",
+                    "tmux",
+                    "new-window",
+                    "-d",
+                    "-a",
+                    "-P",
+                    "-F",
+                    "#{window_index}",
+                    "-t",
+                    last.as_str(),
+                    "--",
+                    shell,
+                    "-l",
                 ]
             };
             let idx = self
@@ -1020,7 +1048,7 @@ mod tests {
     fn validate_window_name_rules() {
         assert!(validate_window_name("build").is_ok());
         assert!(validate_window_name("  ok-name  ").is_ok()); // trimmed
-        // empty / whitespace-only
+                                                              // empty / whitespace-only
         assert!(validate_window_name("").is_err());
         assert!(validate_window_name("   ").is_err());
         // tmux target separator
