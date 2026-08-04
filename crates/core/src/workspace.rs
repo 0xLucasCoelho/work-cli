@@ -394,18 +394,7 @@ impl Workspace {
             return Ok(());
         }
 
-        let out = self.engine.exec_capture(
-            &ctr,
-            &[
-                "tmux",
-                "list-windows",
-                "-t",
-                session,
-                "-F",
-                "#{window_index}\t#{window_name}\t#{window_panes}\t#{window_active}\t#{pane_current_command}",
-            ],
-        )?;
-        let rows: Vec<WindowRow> = out.lines().filter_map(parse_window_line).collect();
+        let rows = self.tmux_windows()?;
 
         if rows.is_empty() {
             println!("no windows in session '{}'", self.cfg.name);
@@ -426,6 +415,34 @@ impl Workspace {
             self.cfg.name
         );
         Ok(())
+    }
+    /// Raw tmux window rows for a RUNNING workspace with a LIVE session (no gating;
+    /// callers check state/session first). Used by both `windows()` and `list_tabs()`
+    /// so neither duplicates the docker exec.
+    fn tmux_windows(&self) -> Result<Vec<WindowRow>> {
+        let ctr = naming::container(&self.cfg.name);
+        let session = naming::session(&self.cfg.name);
+        let out = self.engine.exec_capture(
+            &ctr,
+            &["tmux", "list-windows", "-t", session, "-F",
+               "#{window_index}\t#{window_name}\t#{window_panes}\t#{window_active}\t#{pane_current_command}"],
+        )?;
+        Ok(out.lines().filter_map(parse_window_line).collect())
+    }
+
+    /// Structured tmux windows ("tabs") for this workspace's session. Self-contained:
+    /// returns an empty vec for a stopped/missing container or an absent session, so
+    /// TUI callers can render an empty state without special handling.
+    pub fn windows(&self) -> Result<Vec<WindowRow>> {
+        let ctr = naming::container(&self.cfg.name);
+        let session = naming::session(&self.cfg.name);
+        if !matches!(self.engine.container_state(&ctr)?, ContainerState::Running) {
+            return Ok(Vec::new());
+        }
+        if !self.engine.session_exists(&ctr, session)? {
+            return Ok(Vec::new());
+        }
+        self.tmux_windows()
     }
 
     /// Gather hostname/OS/git-branch via one `docker exec` and print the banner.
@@ -927,13 +944,14 @@ fn validate_window_name(name: &str) -> Result<()> {
 }
 
 /// One parsed row of `tmux list-windows -F` output. PURE (built by
-/// `parse_window_line`).
-struct WindowRow {
-    index: String,
-    name: String,
-    panes: String,
-    active: bool,
-    command: String,
+/// `parse_window_line`). Public so the TUI can render structured tabs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowRow {
+    pub index: String,
+    pub name: String,
+    pub panes: String,
+    pub active: bool,
+    pub command: String,
 }
 
 /// Parse one `tmux list-windows -F` line (TSV: index, name, panes, active,
