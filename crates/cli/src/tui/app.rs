@@ -11,12 +11,12 @@ pub(crate) struct App {
     selected: Option<String>, // workspace NAME under the cursor
     quit: bool,
     status: Option<String>,
+    pending_attach: Option<String>, // workspace NAME to attach after TUI teardown
 }
 
-#[allow(dead_code)] // used from Task 2.5
 impl App {
     pub(crate) fn new() -> Self {
-        Self { model: Vec::new(), selected: None, quit: false, status: None }
+        Self { model: Vec::new(), selected: None, quit: false, status: None, pending_attach: None }
     }
 
     /// Replace the model from a refresh, re-resolving the cursor by NAME. If the
@@ -70,6 +70,9 @@ impl App {
 
     pub(crate) fn set_status(&mut self, msg: impl Into<String>) { self.status = Some(msg.into()); }
     pub(crate) fn status_message(&self) -> Option<&str> { self.status.as_deref() }
+
+    pub(crate) fn request_attach(&mut self, name: String) { self.pending_attach = Some(name); }
+    pub(crate) fn pending_attach(&mut self) -> &mut Option<String> { &mut self.pending_attach }
 
     pub(crate) fn is_empty(&self) -> bool { self.model.is_empty() }
 }

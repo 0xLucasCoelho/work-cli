@@ -52,6 +52,13 @@ pub fn shell(name: &str) -> Result<()> {
     let ws = Workspace::open(name)?;
     ws.shell()
 }
+
+#[allow(dead_code)] // wired into the dashboard in Task 2.6; near-twin of `shell`
+/// `work <ws>`: open the workspace and attach to its persistent in-container session.
+pub fn attach(name: &str) -> Result<()> {
+    let ws = work_core::workspace::Workspace::open(name)?;
+    ws.shell()
+}
 /// `work tab <ws> [--name <n>]`: open a new in-container tmux window and attach.
 pub fn tab(ws: &str, name: Option<&str>) -> Result<()> {
     let ws = Workspace::open(ws)?;
