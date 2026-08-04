@@ -22,6 +22,10 @@ The first public release. Not yet tagged — see
 - `work fwd <ws> <port>` — opt-in host→workspace port bridge for your own logins.
 - `work browse <ws>` — forward URLs that in-container tools open (`xdg-open`/`$BROWSER`) to your host browser, so OAuth/subscription logins (Claude Code, Cursor CLI, …) complete without leaving the terminal. Also auto-bridges the OAuth `localhost:<port>` callback into the workspace, so a login completes with one command (no separate `work fwd`).
 - `work config <ws> [--edit]` — show/edit non-secret workspace metadata.
+- `work update <ws>` — re-sync managed config files into a running container
+  **in place**: no image rebuild, no recreate, no session loss. Source mirrors
+  `work new` (--import-* flags → global config → embedded templates).
+  `--dry-run` previews; `-a`/`--all` updates every workspace.
 - `work doctor` — isolation + engine sanity check (unique network per workspace,
   only its own volume mounted, non-root, no host ports, image match).
 

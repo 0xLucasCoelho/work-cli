@@ -191,6 +191,25 @@ that aren't single files. `--default` does the same with the **bundled
 setup. Both also read a global default (`import_dotfiles = "…"`). The same secret-free
 warning applies; explicit `--import-*` flags override individual files from a dotfiles seed.
 
+## Updating configs in place (`work update`)
+
+`work new` seeds config files into a container's `/home/dev` as a **snapshot**.
+When you edit those configs — your `templates/` tree, or the host files a global
+default points at — `work update` pushes the new versions into a **running**
+container in place: no image rebuild, no recreate, no session loss.
+
+```
+work update acme            # re-sync this workspace's configs now
+work update --all           # re-sync every workspace
+work update acme --dry-run  # preview which files would change; write nothing
+```
+
+It overwrites only **managed** config files (`.zshrc`, `.tmux.conf`,
+`.config/…`); your projects, repos, and agent state in the volume are never
+touched. Source resolution mirrors `work new`: explicit `--import-*` flags →
+global config defaults → the embedded `templates/`. Each run prints what changed
+(`+` added, `~` changed, `=` in sync), and `--dry-run` previews without writing.
+
 ## A separated environment (in-container identity)
 
 Every `work <ws>` attach makes the workspace unmistakably identifiable as its own
@@ -320,6 +339,7 @@ work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 | `work fwd <ws> <port>` | (opt-in) forward a host port into a workspace for your own logins. |
 | `work browse <ws>` | Forward URLs tools open inside the workspace to your host browser (OAuth logins). Ctrl-C stops. |
 | `work config <ws>` | Show config. `--edit` opens it in `$EDITOR`. |
+| `work update <ws>` | Re-sync managed config files into a running container in place (no rebuild/recreate). `--dry-run` previews; `-a`/`--all` updates every workspace. Source mirrors `work new` (`--import-*` → config → templates). |
 | `work image build` | Build the default `work-base:latest`; `--tag`/`--dockerfile` for custom images. |
 | `work image init` | Scaffold a personal-image Dockerfile (extends `work-base`) to customize. |
 | `work doctor` | Isolation + engine sanity check. |

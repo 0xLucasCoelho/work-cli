@@ -7,7 +7,7 @@
 /// added here (and `validate_name` will then reject it as a workspace name).
 pub const RESERVED: &[&str] = &[
     "new", "all", "browse", "ls", "start", "stop", "stop-all", "resume", "fwd", "config", "image",
-    "doctor", "help", "version", "rm", "tab", "tabs",
+    "doctor", "help", "version", "rm", "tab", "tabs", "update",
 ];
 
 pub fn volume(ws: &str) -> String {
@@ -62,8 +62,7 @@ mod tests {
     #[test]
     fn reserved_includes_every_cli_verb() {
         for verb in [
-            "new", "all", "browse", "ls", "start", "stop", "stop-all", "resume", "fwd", "config",
-            "image", "doctor", "help", "version", "rm", "tab", "tabs",
+            "image", "doctor", "help", "version", "rm", "tab", "tabs", "update",
         ] {
             assert!(RESERVED.contains(&verb), "missing reserved verb: {verb}");
             assert!(

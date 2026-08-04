@@ -3,12 +3,13 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Args;
+use clap_complete::engine::ArgValueCompleter;
 
 use work_core::config::ImportSrc;
 use work_core::safety::{decide, Action, Severity};
 use work_core::{
     config, doctor, engine, image,
-    workspace::{self, Workspace, WorkspaceStatus},
+    workspace::{self, UpdateReport, Workspace, WorkspaceStatus},
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -288,6 +289,117 @@ pub fn config_edit(name: &str, yes: bool) -> Result<()> {
     Ok(())
 }
 
+struct UpdateSrcs {
+    shell: Option<ImportSrc>,
+    tmux: Option<ImportSrc>,
+    starship: Option<ImportSrc>,
+    dotfiles: Option<std::path::PathBuf>,
+}
+
+/// `work update [ws] [--all] [--dry-run]`: re-seed managed config files into a
+/// running workspace's container in place — no rebuild, no recreate. Source
+/// resolution mirrors `work new`: explicit --import-* flags → global config →
+/// the embedded templates. Overwrites only managed config files.
+pub fn update(args: &UpdateArgs) -> Result<()> {
+    let to_src = |v: &Option<String>| match v {
+        None => None,
+        Some(s) if s.is_empty() => Some(ImportSrc::Auto),
+        Some(s) => Some(ImportSrc::Explicit(s.clone().into())),
+    };
+    let srcs = UpdateSrcs {
+        shell: to_src(&args.import_shell_config),
+        tmux: to_src(&args.import_tmux_config),
+        starship: to_src(&args.import_starship_config),
+        dotfiles: args.import_dotfiles.clone(),
+    };
+
+    if args.dry_run {
+        println!("· dry run — no files will be written\n");
+    }
+
+    if args.all {
+        let names = config::list_workspace_names()?;
+        if names.is_empty() {
+            println!("no workspaces to update");
+            return Ok(());
+        }
+        let mut touched = 0usize;
+        let mut unchanged = 0usize;
+        let mut skipped = 0usize;
+        for name in &names {
+            match Workspace::open(name).and_then(|ws| {
+                ws.update(
+                    srcs.shell.clone(),
+                    srcs.tmux.clone(),
+                    srcs.starship.clone(),
+                    srcs.dotfiles.clone(),
+                    args.dry_run,
+                )
+            }) {
+                Ok(rep) => {
+                    print_report(name, &rep, args.dry_run);
+                    touched += rep.touched();
+                    unchanged += rep.unchanged.len();
+                }
+                Err(e) => {
+                    eprintln!("· '{name}': {e}");
+                    skipped += 1;
+                }
+            }
+        }
+        let verb = if args.dry_run { "would sync" } else { "synced" };
+        println!(
+            "\n{verb} {touched} file(s) across {} workspace(s) ({unchanged} in sync, {skipped} skipped)",
+            names.len()
+        );
+        return Ok(());
+    }
+
+    let name = args.ws.as_deref().ok_or_else(|| {
+        anyhow::anyhow!("specify a workspace, or use --all to update every workspace")
+    })?;
+    let ws = Workspace::open(name)?;
+    let rep = ws.update(
+        srcs.shell,
+        srcs.tmux,
+        srcs.starship,
+        srcs.dotfiles,
+        args.dry_run,
+    )?;
+    print_report(name, &rep, args.dry_run);
+    Ok(())
+}
+
+/// Print a workspace's update classification: a one-line summary then each file.
+fn print_report(name: &str, rep: &UpdateReport, dry_run: bool) {
+    let verb = if dry_run { "would update" } else { "updated" };
+    let mut parts = Vec::new();
+    if !rep.updated.is_empty() {
+        parts.push(format!("{} changed", rep.updated.len()));
+    }
+    if !rep.added.is_empty() {
+        parts.push(format!("{} added", rep.added.len()));
+    }
+    if !rep.unchanged.is_empty() {
+        parts.push(format!("{} in sync", rep.unchanged.len()));
+    }
+    let summary = if parts.is_empty() {
+        "no managed files".to_string()
+    } else {
+        parts.join(", ")
+    };
+    println!("✓ {verb} '{name}' — {summary}");
+    for f in &rep.added {
+        println!("  + {f}");
+    }
+    for f in &rep.updated {
+        println!("  ~ {f}");
+    }
+    for f in &rep.unchanged {
+        println!("  = {f}");
+    }
+}
+
 /// `work fwd <ws> <port>`: opt-in port bridge for the user's own logins.
 pub fn fwd(ws: &str, port: u16) -> Result<()> {
     workspace::forward(ws, port)
@@ -354,4 +466,29 @@ pub struct NewArgs {
     /// Use the author's bundled dotfiles + configured default image.
     #[arg(long = "default")]
     pub use_author_default: bool,
+}
+
+#[derive(Args)]
+pub struct UpdateArgs {
+    /// Workspace whose config to re-sync (omit with --all for every workspace).
+    #[arg(add = ArgValueCompleter::new(crate::completion::complete_workspace))]
+    pub ws: Option<String>,
+    /// Re-sync every workspace.
+    #[arg(short, long)]
+    pub all: bool,
+    /// Preview which files would change; write nothing.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+    /// Copy your shell rc into the workspace (no value = detected rc).
+    #[arg(long = "import-shell-config", num_args = 0..=1, default_missing_value = "")]
+    pub import_shell_config: Option<String>,
+    /// Copy a .tmux.conf into the workspace (no value = ~/.tmux.conf).
+    #[arg(long = "import-tmux-config", num_args = 0..=1, default_missing_value = "")]
+    pub import_tmux_config: Option<String>,
+    /// Copy a starship.toml into the workspace (no value = ~/.config/starship.toml).
+    #[arg(long = "import-starship-config", num_args = 0..=1, default_missing_value = "")]
+    pub import_starship_config: Option<String>,
+    /// Recursively copy a dotfiles directory into the workspace's /home/dev.
+    #[arg(long = "import-dotfiles")]
+    pub import_dotfiles: Option<std::path::PathBuf>,
 }

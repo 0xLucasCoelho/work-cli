@@ -166,6 +166,16 @@ enum Command {
     /// volume, runs non-root, uses the configured image, and publishes no host
     /// ports.
     Doctor,
+    /// Re-sync managed config files into a running workspace (no rebuild).
+    ///
+    /// Pushes the current dotfiles/templates into a container's `/home/dev` in
+    /// place — overwriting managed configs (.zshrc, .tmux.conf, .config/…) without
+    /// rebuilding the image or recreating the container. Source resolution
+    /// mirrors `work new`: explicit --import-* flags → global config defaults →
+    /// the embedded templates. `--dry-run` previews; `-a`/`--all` updates all.
+    ///
+    /// Examples: `work update acme`; `work update --all`; `work update acme --dry-run`.
+    Update(commands::UpdateArgs),
     /// Bare `work <ws>`: attach to a workspace's persistent session.
     /// External-subcommand name is `args[0]`; trailing tokens are `args[1..]`.
     /// Modeled natively so dynamic completion can offer workspace names for it.
@@ -290,6 +300,7 @@ fn main() -> Result<ExitCode> {
         Some(Command::Doctor) => {
             return commands::doctor();
         }
+        Some(Command::Update(a)) => commands::update(&a)?,
         Some(Command::Other(args)) => {
             // `work <ws>` -> attach. args[0] is the workspace name (validated by shell()).
             let name = args.first().cloned().unwrap_or_default();

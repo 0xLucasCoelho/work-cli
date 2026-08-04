@@ -25,6 +25,29 @@ pub struct WorkspaceStatus {
     pub session_live: bool,
 }
 
+/// `work update` outcome: managed config files classified against the running
+/// container, each path relative to `/home/dev`.
+#[derive(Debug, Clone, Default)]
+pub struct UpdateReport {
+    /// Absent in the container (would be / were created).
+    pub added: Vec<String>,
+    /// Present but differing (would be / were overwritten).
+    pub updated: Vec<String>,
+    /// Present and byte-identical (skipped).
+    pub unchanged: Vec<String>,
+}
+
+impl UpdateReport {
+    /// Files that differ or are absent — i.e. written by a real update.
+    pub fn touched(&self) -> usize {
+        self.added.len() + self.updated.len()
+    }
+    /// Every classified file.
+    pub fn total(&self) -> usize {
+        self.touched() + self.unchanged.len()
+    }
+}
+
 impl Workspace {
     pub fn engine(&self) -> &dyn Engine {
         &*self.engine
@@ -570,6 +593,184 @@ impl Workspace {
         let _ = std::fs::remove_file(config::workspace_config_path(&self.cfg.name));
         Ok(())
     }
+    /// `work update`: re-seed managed config files into the running container in
+    /// place — no rebuild, no recreate, no session loss. Source resolution
+    /// mirrors `work new` (explicit `--import-*` flags → global config defaults
+    /// → embedded templates), but update seeds the embedded templates whenever
+    /// no dotfiles dir is resolved, so a bare `work update <ws>` pushes the
+    /// current templates without `--default`. `dry_run` classifies every file
+    /// without writing. Returns the per-file classification for reporting.
+    pub fn update(
+        &self,
+        import_shell: Option<ImportSrc>,
+        import_tmux: Option<ImportSrc>,
+        import_starship: Option<ImportSrc>,
+        import_dotfiles: Option<std::path::PathBuf>,
+        dry_run: bool,
+    ) -> Result<UpdateReport> {
+        let global = config::load_global()?;
+        let dotfiles_dir = import_dotfiles.or(global.import_dotfiles.clone());
+
+        // Per-file imports: a flag overrides the global default (mirrors `create`).
+        let rc = config::rc_name(self.cfg.shell.as_deref().unwrap_or("zsh"));
+        let seeds: Vec<(std::path::PathBuf, String)> = [
+            resolve_import(import_shell, global.import_shell_config.as_deref())
+                .map(|s| (s.to_path(rc), format!("/home/dev/{rc}"))),
+            resolve_import(import_tmux, global.import_tmux_config.as_deref())
+                .map(|s| (s.to_path(".tmux.conf"), "/home/dev/.tmux.conf".into())),
+            resolve_import(import_starship, global.import_starship_config.as_deref()).map(|s| {
+                (
+                    s.to_path(".config/starship.toml"),
+                    "/home/dev/.config/starship.toml".into(),
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        // Validate sources BEFORE touching the container, so a bad path fails fast.
+        for (src, _dest) in &seeds {
+            if !src.exists() {
+                bail!(
+                    "config to import not found at {}; pass an explicit --import-* path",
+                    src.display()
+                );
+            }
+        }
+        if let Some(dir) = &dotfiles_dir {
+            if !dir.exists() {
+                bail!("dotfiles dir not found at {}", dir.display());
+            }
+        }
+
+        // Tree to seed: an explicit dotfiles dir, else the embedded templates.
+        let templates_tmp;
+        let tree_dir: Option<&Path> = match &dotfiles_dir {
+            Some(d) => Some(d.as_path()),
+            None => {
+                templates_tmp = Some(crate::templates::extract_to_tempdir()?);
+                Some(templates_tmp.as_ref().unwrap().path())
+            }
+        };
+
+        // `docker cp` + `chown` need the container up.
+        self.ensure_running()?;
+        let ctr = naming::container(&self.cfg.name);
+
+        // Build the file list keyed by container dest. Per-file imports override
+        // any same-dest file from the tree (mirrors `create`'s seeding order).
+        use std::collections::BTreeMap;
+        let mut files: BTreeMap<String, (std::path::PathBuf, String)> = BTreeMap::new();
+        if let Some(dir) = tree_dir {
+            walk_tree(dir, dir, &mut |host, rel| {
+                files.insert(format!("/home/dev/{rel}"), (host, rel));
+            })?;
+        }
+        for (src, dest) in &seeds {
+            files.insert(dest.clone(), (src.clone(), container_rel(dest)));
+        }
+
+        // Diff every file against its in-container counterpart by content hash.
+        let mut report = UpdateReport::default();
+        for (dest, (host, rel)) in &files {
+            match file_status(&*self.engine, &ctr, host, dest)? {
+                FileStatus::Missing => report.added.push(rel.clone()),
+                FileStatus::Same => report.unchanged.push(rel.clone()),
+                FileStatus::Changed => report.updated.push(rel.clone()),
+            }
+        }
+
+        // Dry-run reports only. Nothing to write when every file is in sync.
+        if dry_run || report.touched() == 0 {
+            return Ok(report);
+        }
+
+        // Apply: seed the whole tree, then per-file imports on top.
+        if let Some(dir) = tree_dir {
+            self.engine
+                .seed_dir(&ctr, dir, "/home/dev")
+                .context("seeding config tree")?;
+        }
+        for (src, dest) in &seeds {
+            self.engine
+                .seed_file(&ctr, src, dest)
+                .with_context(|| format!("copying {} into {dest}", src.display()))?;
+        }
+        self.apply_git_identity()?;
+        Ok(report)
+    }
+}
+
+// ---------- `work update` helpers ----------
+
+/// A host file's relationship to its in-container counterpart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileStatus {
+    Missing,
+    Same,
+    Changed,
+}
+
+/// Strip the `/home/dev/` prefix from an absolute in-container path, returning a
+/// path relative to the volume root for reporting. PURE.
+fn container_rel(dest: &str) -> String {
+    dest.strip_prefix("/home/dev/")
+        .or_else(|| dest.strip_prefix("/home/dev"))
+        .unwrap_or(dest)
+        .to_string()
+}
+
+/// Recursively enumerate every FILE under `root`, invoking `emit` with each
+/// (absolute host path, path relative to `root` using forward slashes). Skips
+/// directories and symlinks. PURE-ish: host FS reads only, no container IO.
+fn walk_tree(
+    root: &Path,
+    dir: &Path,
+    emit: &mut impl FnMut(std::path::PathBuf, String),
+) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            walk_tree(root, &path, emit)?;
+        } else if path.is_file() {
+            let rel = path
+                .strip_prefix(root)
+                .with_context(|| format!("stripping prefix from {}", path.display()))?
+                .to_string_lossy()
+                .to_string();
+            emit(path, rel);
+        }
+    }
+    Ok(())
+}
+
+/// sha256 of a host file's bytes, as lowercase hex. PURE given the file.
+fn file_sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).with_context(|| format!("hashing {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Compare a host file against its in-container counterpart by sha256. The
+/// container hash comes from `docker exec sha256sum <dest>` (coreutils, present
+/// on every base image). A missing file or any read error resolves to `Missing`
+/// — the apply step then creates it; a transient exec failure is unlikely
+/// because `update` ensures the container is running first.
+fn file_status(engine: &dyn Engine, ctr: &str, host: &Path, dest: &str) -> Result<FileStatus> {
+    let want = file_sha256(host)?;
+    let have = engine
+        .exec_capture(ctr, &["sha256sum", dest])
+        .ok()
+        .and_then(|s| s.split_whitespace().next().map(str::to_string));
+    Ok(match have {
+        Some(h) if h == want => FileStatus::Same,
+        Some(_) => FileStatus::Changed,
+        None => FileStatus::Missing,
+    })
 }
 
 /// `docker run` options for a workspace container. Sets the `WORK`/`WORKSPACE`
@@ -1078,5 +1279,51 @@ mod tests {
     fn parse_window_line_rejects_malformed() {
         assert!(parse_window_line("").is_none());
         assert!(parse_window_line("only\ttwo").is_none());
+    }
+    #[test]
+    fn container_rel_strips_volume_root() {
+        assert_eq!(container_rel("/home/dev/.tmux.conf"), ".tmux.conf");
+        assert_eq!(
+            container_rel("/home/dev/.config/starship.toml"),
+            ".config/starship.toml"
+        );
+    }
+
+    #[test]
+    fn container_rel_passes_through_non_volume_paths() {
+        assert_eq!(container_rel("/etc/hostname"), "/etc/hostname");
+        // Bare volume root without a trailing slash -> empty relative path.
+        assert_eq!(container_rel("/home/dev"), "");
+    }
+
+    #[test]
+    fn walk_tree_lists_nested_files_relative() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join(".tmux.conf"), b"x").unwrap();
+        std::fs::create_dir_all(root.join(".config")).unwrap();
+        std::fs::write(root.join(".config").join("starship.toml"), b"y").unwrap();
+
+        let mut got: Vec<String> = Vec::new();
+        walk_tree(root, root, &mut |_host, rel| got.push(rel)).unwrap();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ".config/starship.toml".to_string(),
+                ".tmux.conf".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn update_report_touched_and_total() {
+        let r = UpdateReport {
+            added: vec!["a".into()],
+            updated: vec!["b".into(), "c".into()],
+            unchanged: vec!["d".into()],
+        };
+        assert_eq!(r.touched(), 3);
+        assert_eq!(r.total(), 4);
     }
 }
