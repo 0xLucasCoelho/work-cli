@@ -3,7 +3,7 @@
 # GitHub release into a writable bin dir. macOS + Linux, arm64 + x86_64.
 set -e
 
-REPO="coelhucas-dev/work-cli"
+REPO="0xlucascoelho/work-cli"
 BIN_NAME="work"
 
 command -v curl >/dev/null 2>&1 || { echo "error: curl is required" >&2; exit 1; }
@@ -39,6 +39,14 @@ trap 'rm -rf "$tmpdir"' EXIT
 url="https://github.com/${REPO}/releases/download/${latest_tag}/${target}.tar.gz"
 echo "Downloading $url"
 curl -fsSL "$url" -o "$tmpdir/pkg.tar.gz"
+# Verify build provenance if the GitHub CLI is available; otherwise warn and
+# continue (attestation is best-effort, not a hard install requirement).
+if command -v gh >/dev/null 2>&1; then
+    gh attestation verify "$tmpdir/pkg.tar.gz" --repo "${REPO}" \
+        || { echo "error: attestation verification failed" >&2; exit 1; }
+else
+    echo "warning: gh not found — skipping provenance verification" >&2
+fi
 tar -xzf "$tmpdir/pkg.tar.gz" -C "$tmpdir"
 
 cp "$tmpdir/$BIN_NAME" "$install_dir/$BIN_NAME"

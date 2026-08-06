@@ -8,8 +8,15 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -19,11 +26,12 @@ jobs:
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, archive: work-x86_64-unknown-linux-gnu }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
       - name: Package
@@ -32,16 +40,22 @@ jobs:
           cp target/${{ matrix.target }}/release/work staging/
           cp README.md LICENSE staging/
           tar -czf ${{ matrix.archive }}.tar.gz -C staging .
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ matrix.archive }}.tar.gz
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: ${{ matrix.archive }}.tar.gz
 
   update-tap:
     needs: build
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Resolve version
         id: v
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
@@ -67,9 +81,9 @@ jobs:
             distribution/homebrew/work.rb.template > out/Formula/work.rb
           cat out/Formula/work.rb
       - name: Push to homebrew-tap
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: coelhucas-dev/homebrew-tap
+          repository: 0xlucascoelho/homebrew-tap
           path: tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       - name: Commit formula

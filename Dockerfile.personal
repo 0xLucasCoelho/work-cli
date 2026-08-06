@@ -11,7 +11,7 @@
 # Use:     work new <ws> --image work-lucas:latest
 # Default: set `default_image = "work-lucas:latest"` in ~/.config/work/config.toml
 
-FROM ubuntu:24.04
+FROM ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -35,16 +35,29 @@ RUN case "$(uname -m)" in \
     chmod +x /usr/local/bin/herdr
 
 # --- Node 22 LTS via NodeSource (Ubuntu 24.04 ships Node 18, which is EOL) ---
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+# GPG-verified apt source instead of piping setup_22.x to bash.
+RUN install -d -m 0755 /etc/apt/keyrings \
+ && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+      -o /etc/apt/keyrings/nodesource.asc \
+ && echo "deb [signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_22.x nodistro main" \
+      > /etc/apt/sources.list.d/nodesource.list \
+ && apt-get update \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
 
 # --- Rust-based CLIs via cargo-binstall (not in Ubuntu repos) ---
 # glibc 2.39 is new enough for gnu releases — no musl workarounds needed.
 ENV CARGO_HOME=/usr/local
-RUN curl -L --proto '=https' --tlsv1.2 -sSf \
-      https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
-    | bash \
+ARG CARGO_BINSTALL_VERSION=v1.21.1
+ARG TARGETARCH
+RUN triple=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+      arm64) echo aarch64-unknown-linux-gnu ;; \
+      amd64) echo x86_64-unknown-linux-gnu ;; \
+      *) echo "unsupported arch: ${TARGETARCH:-$(dpkg --print-architecture)}" >&2; exit 1 ;; \
+    esac) \
+ && curl -fsSL -o /tmp/cb.tgz \
+      "https://github.com/cargo-bins/cargo-binstall/releases/download/${CARGO_BINSTALL_VERSION}/cargo-binstall-${triple}.tgz" \
+ && tar -xzf /tmp/cb.tgz -C /usr/local/bin && rm /tmp/cb.tgz \
  && cargo-binstall -y --disable-strategies compile \
       starship zoxide fd-find bat eza git-delta atuin mise \
  && rm -rf /usr/local/registry /usr/local/.crates*
