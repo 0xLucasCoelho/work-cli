@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Lucas Coelho"]
-repository = "https://github.com/coelhucas-dev/work-cli"
+repository = "https://github.com/0xlucascoelho/work-cli"
 description = "Isolated multi-context session manager for developers"
 
 [workspace.dependencies]

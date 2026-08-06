@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 The first public release. Not yet tagged — see
-[commits](https://github.com/coelhucas-dev/work-cli/commits/main).
+[commits](https://github.com/0xlucascoelho/work-cli/commits/main).
 
 ### Changed — herdr replaces in-container tmux
 
@@ -94,7 +94,7 @@ The first public release. Not yet tagged — see
   fzf/ripgrep/direnv/starship/zoxide/fd/bat/eza/git-delta/atuin/mise.
 
 ### Added — distribution & update awareness
-- Homebrew tap: `brew install coelhucas-dev/tap/work` (bottles from release
+- Homebrew tap: `brew install 0xlucascoelho/tap/work` (bottles from release
   assets); `cargo binstall` and a `curl | sh` installer as fallbacks.
 - Non-intrusive update-available check: once a day, prints a channel-aware
   one-line hint to stderr. Opt out with `[update] check = false` or
@@ -132,4 +132,4 @@ The first public release. Not yet tagged — see
   containers created before the fix; the default `.tmux.conf` re-picks it up
   via `update-environment` on re-attach.
 
-[Unreleased]: https://github.com/coelhucas-dev/work-cli/commits/main
+[Unreleased]: https://github.com/0xlucascoelho/work-cli/commits/main

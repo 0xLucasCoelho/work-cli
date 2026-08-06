@@ -60,7 +60,7 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement via a **private
-GitHub message to [@coelhucas-dev](https://github.com/coelhucas-dev)** or through
+GitHub message to [@0xlucascoelho](https://github.com/0xlucascoelho)** or through
 the repository's **Security Advisories**. All complaints will be reviewed and
 investigated promptly and fairly.
 

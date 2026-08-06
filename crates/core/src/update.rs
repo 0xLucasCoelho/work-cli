@@ -6,7 +6,7 @@
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 #[allow(dead_code)]
-const RELEASES_URL: &str = "https://api.github.com/repos/coelhucas-dev/work-cli/releases/latest";
+const RELEASES_URL: &str = "https://api.github.com/repos/0xlucascoelho/work-cli/releases/latest";
 
 /// Strip a leading `v` from a release tag (`v0.2.0` -> `0.2.0`). PURE.
 #[allow(dead_code)]
@@ -67,10 +67,10 @@ impl Channel {
                 format!("work {latest} available — run \"brew upgrade work\"")
             }
             Channel::Cargo => format!(
-                "work {latest} available — run \"cargo install --git https://github.com/coelhucas-dev/work-cli\""
+                "work {latest} available — run \"cargo install --git https://github.com/0xlucascoelho/work-cli\""
             ),
             Channel::Other => format!(
-                "work {latest} available — see https://github.com/coelhucas-dev/work-cli/releases"
+                "work {latest} available — see https://github.com/0xlucascoelho/work-cli/releases"
             ),
         }
     }

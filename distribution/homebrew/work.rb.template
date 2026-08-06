@@ -2,22 +2,22 @@
 # Do not edit by hand — it is regenerated on every release.
 class Work < Formula
   desc "Isolated multi-context session manager for developers"
-  homepage "https://github.com/coelhucas-dev/work-cli"
+  homepage "https://github.com/0xlucascoelho/work-cli"
   license "MIT"
   version "@VERSION@"
 
   on_macos do
     on_arm do
-      url "https://github.com/coelhucas-dev/work-cli/releases/download/v@VERSION@/work-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/0xlucascoelho/work-cli/releases/download/v@VERSION@/work-aarch64-apple-darwin.tar.gz"
       sha256 "@ARM64_SHA@"
     end
     on_intel do
-      url "https://github.com/coelhucas-dev/work-cli/releases/download/v@VERSION@/work-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/0xlucascoelho/work-cli/releases/download/v@VERSION@/work-x86_64-apple-darwin.tar.gz"
       sha256 "@INTEL_SHA@"
     end
   end
   on_linux do
-    url "https://github.com/coelhucas-dev/work-cli/releases/download/v@VERSION@/work-x86_64-unknown-linux-gnu.tar.gz"
+    url "https://github.com/0xlucascoelho/work-cli/releases/download/v@VERSION@/work-x86_64-unknown-linux-gnu.tar.gz"
     sha256 "@LINUX_SHA@"
   end
 
