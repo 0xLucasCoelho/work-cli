@@ -106,7 +106,6 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
         let mut tui = Tui::enter()?;
         let mut app = App::new();
         app.set_model(load_model()?);
-        refresh_tabs(&mut app)?;
         run_loop(&mut tui, &mut app, yes, &rx)?;
         app.pending().take()
     };
@@ -114,7 +113,6 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
     quit.store(true, Ordering::Relaxed);
     match pending {
         Some(app::PendingAction::Attach(n)) => commands::attach(&n)?,
-        Some(app::PendingAction::NewTab(n)) => commands::tab(&n, None)?,
         Some(app::PendingAction::Create(n)) => {
             commands::new(&n, None, None, None, None, None, None, None, false)?
         }
@@ -233,7 +231,6 @@ fn run_loop(
                         match load_model() {
                             Ok(m) => {
                                 app.set_model(m);
-                                let _ = refresh_tabs(app);
                                 app.set_status("refreshed");
                             }
                             Err(e) => app.set_status(format!("refresh failed: {e}")),
@@ -242,10 +239,6 @@ fn run_loop(
                         match key.code {
                             KeyCode::Down | KeyCode::Char('j') => app.move_down(),
                             KeyCode::Up | KeyCode::Char('k') => app.move_up(),
-                            KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => {
-                                app.toggle_expand();
-                                refresh_tabs(app)?;
-                            }
                             KeyCode::Enter => {
                                 app.request_attach(name);
                                 return Ok(()); // attach after teardown (run() handles it)
@@ -272,10 +265,6 @@ fn run_loop(
                                 "Remove",
                                 |w| w.remove(false),
                             ),
-                            KeyCode::Char('t') => {
-                                app.request_tab(name);
-                                return Ok(()); // new tab + attach after teardown
-                            }
                             _ => {}
                         }
                     }
@@ -339,8 +328,8 @@ fn load_model() -> anyhow::Result<Vec<work_core::workspace::WorkspaceStatus>> {
 }
 
 /// Drain all pending background-refresh messages: `Ok` reconciles the model
-/// (name-keyed, so selection survives) and refreshes tabs; `Err` keeps the last
-/// good model and surfaces a transient status — the list is never blanked.
+/// (name-keyed, so selection survives); `Err` keeps the last good model and
+/// surfaces a transient status — the list is never blanked.
 fn drain_refresh(
     rx: &std::sync::mpsc::Receiver<Result<Vec<work_core::workspace::WorkspaceStatus>, String>>,
     app: &mut App,
@@ -349,24 +338,8 @@ fn drain_refresh(
         match msg {
             Ok(model) => {
                 app.set_model(model);
-                let _ = refresh_tabs(app);
             }
             Err(_) => app.set_status("refresh failed — showing last state"),
         }
     }
-}
-
-/// Fetch tabs for the expanded workspace (if any) via `Workspace::windows()`.
-/// Best-effort: a docker error just leaves the previously-known tabs (or none),
-/// never crashing the TUI.
-fn refresh_tabs(app: &mut App) -> anyhow::Result<()> {
-    let name = match app.expanded_name() {
-        Some(name) => name.to_string(),
-        None => return Ok(()),
-    };
-    if let Ok(ws) = work_core::workspace::Workspace::open(&name) {
-        let tabs = ws.windows().unwrap_or_default();
-        app.set_tabs(&name, tabs);
-    }
-    Ok(())
 }

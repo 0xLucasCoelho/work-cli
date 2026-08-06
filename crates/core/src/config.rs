@@ -17,9 +17,9 @@ pub struct GlobalConfig {
     /// Optional global default rc to seed into every new workspace (off by default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_shell_config: Option<PathBuf>,
-    /// Optional global default .tmux.conf to seed into every new workspace.
+    /// Optional global default herdr config (config.toml) to seed into every new workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub import_tmux_config: Option<PathBuf>,
+    pub import_herdr_config: Option<PathBuf>,
     /// Optional global default starship.toml to seed into every new workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_starship_config: Option<PathBuf>,
@@ -105,7 +105,7 @@ pub fn load_global() -> Result<GlobalConfig> {
         return Ok(GlobalConfig {
             default_image: Some(DEFAULT_IMAGE.to_string()),
             import_shell_config: None,
-            import_tmux_config: None,
+            import_herdr_config: None,
             import_starship_config: None,
             import_dotfiles: None,
             show_banner: true,
@@ -233,7 +233,7 @@ mod tests {
         let g = GlobalConfig {
             default_image: Some(DEFAULT_IMAGE.to_string()),
             import_shell_config: None,
-            import_tmux_config: None,
+            import_herdr_config: None,
             import_starship_config: None,
             import_dotfiles: None,
             show_banner: true,

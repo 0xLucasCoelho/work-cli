@@ -14,14 +14,11 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).split(area);
 
-    let expanded = app.expanded_name();
     let visible = app.visible_names();
     let selected = app.selected_name();
 
     // Build the flat item list from the (possibly filtered) visible set, and
-    // record the selected workspace's flat index along the way. Tab child rows
-    // are appended under their expanded parent but are not selectable, so they
-    // push later rows down without changing which NAME is highlighted.
+    // record the selected workspace's flat index along the way.
     let mut items: Vec<ListItem> = Vec::new();
     let mut selected_idx: Option<usize> = None;
     for name in &visible {
@@ -41,21 +38,6 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
             "{:<16} {:<8} {}",
             w.name, st, dot
         ))));
-
-        // When this workspace is the expanded one AND its tabs are loaded,
-        // append an indented child row per tab beneath it. Tabs not loaded
-        // yet just show the workspace row.
-        if expanded == Some(w.name.as_str()) {
-            if let Some(tabs) = app.expanded_tabs() {
-                for t in tabs {
-                    let active = if t.active { " (active)" } else { "" };
-                    items.push(ListItem::new(Line::from(format!(
-                        "    · {}{}",
-                        t.name, active
-                    ))));
-                }
-            }
-        }
     }
 
     let list = List::new(items)
@@ -84,7 +66,7 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
         )
     } else {
         app.status_message().unwrap_or(
-            "Up/Dn move · Enter attach · s start · x stop · d rm · t tab · n new · / filter · r refresh · q/Ctrl-C quit"
+            "Up/Dn move · Enter attach · s start · x stop · d rm · n new · / filter · r refresh · q/Ctrl-C quit"
         ).to_string()
     };
     frame.render_widget(Paragraph::new(footer), chunks[1]);

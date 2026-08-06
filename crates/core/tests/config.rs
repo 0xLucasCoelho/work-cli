@@ -42,7 +42,7 @@ fn detect_shell_clamps_to_zsh_or_bash() {
 #[test]
 fn global_config_supports_import_defaults() {
     let g: GlobalConfig = toml::from_str(
-        "import_shell_config = '/Users/x/.zshrc'\nimport_tmux_config = '/Users/x/.tmux.conf'\nimport_starship_config = '/Users/x/.config/starship.toml'\nimport_dotfiles = '/Users/x/dotfiles'\n",
+        "import_shell_config = '/Users/x/.zshrc'\nimport_herdr_config = '/Users/x/.config/herdr/config.toml'\nimport_starship_config = '/Users/x/.config/starship.toml'\nimport_dotfiles = '/Users/x/dotfiles'\n",
     )
     .unwrap();
     assert_eq!(
@@ -50,8 +50,8 @@ fn global_config_supports_import_defaults() {
         Some(std::path::Path::new("/Users/x/.zshrc"))
     );
     assert_eq!(
-        g.import_tmux_config.as_deref(),
-        Some(std::path::Path::new("/Users/x/.tmux.conf"))
+        g.import_herdr_config.as_deref(),
+        Some(std::path::Path::new("/Users/x/.config/herdr/config.toml"))
     );
     assert_eq!(
         g.import_starship_config.as_deref(),
@@ -65,7 +65,7 @@ fn global_config_supports_import_defaults() {
     // import defaults are absent in an empty config.
     let empty: GlobalConfig = toml::from_str("").unwrap();
     assert!(empty.import_shell_config.is_none());
-    assert!(empty.import_tmux_config.is_none());
+    assert!(empty.import_herdr_config.is_none());
     assert!(empty.import_starship_config.is_none());
     assert!(empty.import_dotfiles.is_none());
 }

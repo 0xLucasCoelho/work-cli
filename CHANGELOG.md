@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The first public release. Not yet tagged — see
 [commits](https://github.com/coelhucas-dev/work-cli/commits/main).
 
+### Changed — herdr replaces in-container tmux
+
+**Breaking** — the in-container multiplexer is now [herdr](https://herdr.dev/);
+`work` keeps the isolation job, herdr owns everything inside the terminal.
+
+- Each workspace runs its own headless **herdr server**; `work <ws>` attaches a
+  client into it. The homegrown in-container tmux session model is gone.
+- **Removed:** `work tab`, `work tabs`, and the cockpit (`work resume` /
+  `work all`). Tabs, panes, and agent lifecycle are now herdr-native (its sidebar
+  / `Ctrl-b c`); re-run `work <ws>` to attach a second client.
+- **Renamed:** `--import-tmux-config` → `--import-herdr-config` (seeds
+  `/home/dev/.config/herdr/config.toml`).
+- The dashboard's expandable per-workspace tab list is removed; the workspace
+  selector stays.
+- **Breaking upgrade:** workspace containers built before this change have tmux,
+  not herdr. Recreate them after upgrading — `work rm <ws>` keeps the volume,
+  then `work new <ws>` rebuilds with the herdr image. Volume contents (repos,
+  credentials, installed tools) are untouched; only the multiplexer binary
+  changes.
+
 ### Added — isolation & lifecycle
 - `work new <ws>` — create an isolated workspace: one Linux container, one named
   volume mounted at `/home/dev`, one dedicated bridge network.

@@ -42,7 +42,7 @@ enum Command {
     /// List workspaces with container state and session liveness.
     ///
     /// Columns: WORKSPACE, STATE (running/stopped/missing), SESSION (live if the
-    /// in-container tmux session `work` exists, else —).
+    /// in-container herdr server is up, else —).
     Ls,
     /// Start a workspace container (creates it from config if missing).
     Start {
@@ -62,14 +62,6 @@ enum Command {
     /// Stop every workspace.
     #[command(name = "stop-all")]
     StopAll,
-    /// Cockpit: tile every running workspace's session in a host tmux.
-    ///
-    /// Opens one host tmux session (prefix Ctrl-a) with a window per running
-    /// workspace, each attached to its in-container session. Stopped workspaces
-    /// are listed in a note. `work all` is an alias.
-    Resume,
-    /// Alias of `resume`.
-    All,
     /// (opt-in) Forward a host port into a workspace for your own logins.
     ///
     /// Bridges 127.0.0.1:<port> on the host to <ws>:<port> — e.g. so a
@@ -117,34 +109,6 @@ enum Command {
         #[command(subcommand)]
         action: ImageCmd,
     },
-    /// Open a new tmux window ("tab") in a workspace's session and attach to it.
-    ///
-    /// Each run opens one persistent window that survives closing the terminal
-    /// (not `work stop`). Bare `work <ws>` still attaches/resumes into the
-    /// existing session; `work tab <ws>` always opens a fresh one. The new tab
-    /// becomes the session's active window (other attached clients move to it too,
-    /// as with `Ctrl-b c`).
-    ///
-    /// Examples: `work tab acme`; `work tab acme --name build`.
-    Tab {
-        /// Workspace to open a new tab in.
-        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
-        ws: String,
-        /// Name the new tmux window (default: auto, shows the running command).
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// List the tmux windows ("tabs") in a workspace's session.
-    ///
-    /// Read-only: index, name, pane count, active marker, current command.
-    /// Prints a hint if the container is stopped or has no live session.
-    ///
-    /// Example: `work tabs acme`.
-    Tabs {
-        /// Workspace whose tabs to list.
-        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
-        ws: String,
-    },
     /// Remove a workspace: container + network + config.
     ///
     /// Keeps the named volume by default (data-safe) — `work new <ws>` then
@@ -169,7 +133,7 @@ enum Command {
     /// Re-sync managed config files into a running workspace (no rebuild).
     ///
     /// Pushes the current dotfiles/templates into a container's `/home/dev` in
-    /// place — overwriting managed configs (.zshrc, .tmux.conf, .config/…) without
+    /// place — overwriting managed configs (.zshrc, .config/herdr/config.toml, …) without
     /// rebuilding the image or recreating the container. Source resolution
     /// mirrors `work new`: explicit --import-* flags → global config defaults →
     /// the embedded templates. `--dry-run` previews; `-a`/`--all` updates all.
@@ -267,7 +231,7 @@ fn main() -> Result<ExitCode> {
             a.git_name,
             a.git_email,
             a.import_shell_config,
-            a.import_tmux_config,
+            a.import_herdr_config,
             a.import_starship_config,
             a.import_dotfiles,
             a.use_author_default,
@@ -276,7 +240,6 @@ fn main() -> Result<ExitCode> {
         Some(Command::Start { name }) => commands::start(&name)?,
         Some(Command::Stop { name }) => commands::stop(&name, cli.yes)?,
         Some(Command::StopAll) => commands::stop_all(cli.yes)?,
-        Some(Command::Resume) | Some(Command::All) => commands::resume()?,
         Some(Command::Fwd { ws, port }) => commands::fwd(&ws, port)?,
         Some(Command::Browse { ws }) => commands::browse(&ws)?,
         Some(Command::Config { ws, edit }) => {
@@ -294,8 +257,6 @@ fn main() -> Result<ExitCode> {
                 commands::image_init(output.as_deref())?;
             }
         },
-        Some(Command::Tab { ws, name }) => commands::tab(&ws, name.as_deref())?,
-        Some(Command::Tabs { ws }) => commands::tabs(&ws)?,
         Some(Command::Rm { ws, purge }) => commands::rm(&ws, purge, cli.yes)?,
         Some(Command::Doctor) => {
             return commands::doctor();
@@ -375,10 +336,6 @@ mod tests {
         assert!(matches!(
             parse(&["stop", "x"]).command,
             Some(Command::Stop { .. })
-        ));
-        assert!(matches!(
-            parse(&["tab", "x"]).command,
-            Some(Command::Tab { .. })
         ));
     }
 

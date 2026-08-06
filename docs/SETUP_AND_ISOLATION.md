@@ -95,7 +95,6 @@ Names are deterministic and namespaced so workspaces can never collide.
 | Container | `work-<ws>` | `work-acme` |
 | Named volume (the private disk) | `work-<ws>-home` | `work-acme-home` |
 | Dedicated bridge network | `work-net-<ws>` | `work-net-acme` |
-| In-container tmux session | `<ws>` | `acme` |
 
 Workspace names are validated to lowercase `[a-z0-9][a-z0-9-]*`, length ≤ 40, and
 cannot collide with a CLI verb (`new`, `rm`, `start`, …). This guarantees every
@@ -123,10 +122,10 @@ This is the core "behind the scenes." (Source: `Workspace::create` in
    - `docker run …` (see the exact command in §6)
 6. **Install the browser bridge shim** (best-effort) so in-container tools can
    later forward `xdg-open`/OAuth URLs to your host browser.
-7. **Seed configs (optional)** — copy dotfiles/shell/tmux/starship config **into
+7. **Seed configs (optional)** — copy dotfiles/shell/herdr/starship config **into
    the volume**, owned by `dev`. A warning is printed because anything copied now
    lives in that workspace's volume. With no imports, a minimal workspace-aware
-   default prompt/tmux config is written instead.
+   default prompt config is written instead.
 8. **Persist non-secret metadata** to `~/.config/work/workspaces/<ws>.toml`
    (name, image, optional git identity, shell, created-at).
 9. **Apply git identity** (optional `user.name`/`user.email`) purely to prevent
@@ -241,7 +240,7 @@ into the volume, and `work` warns you to make sure it is **secret-free**.
 | Command | Effect | Data safe? |
 |---|---|---|
 | `work new <ws>` | create volume + network + container | — |
-| `work <ws>` | ensure running; attach to a persistent tmux session | yes |
+| `work <ws>` | ensure running; attach to the in-container herdr runtime | yes |
 | `work stop <ws>` | stop the container (ends the session; **files persist**) | yes |
 | `work start <ws>` | start again | yes |
 | `work rm <ws>` | remove container + network + config; **keep the volume** | yes |

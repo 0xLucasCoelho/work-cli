@@ -61,7 +61,7 @@ pub const PERSONAL_TEMPLATE: &str = r#"# Personal `work` image — customize thi
 #   # ~/.config/work/config.toml
 #
 # This EXTENDS work-base:latest, so every isolation invariant `work doctor`
-# checks is inherited (non-root `dev` user, /home/dev home, tmux/zsh/bash).
+# checks is inherited (non-root `dev` user, /home/dev home, herdr/zsh/bash).
 # Keep `USER dev` at the end, or `work doctor` will flag the container as root.
 #
 # Bring your ~/.zshrc per-workspace via `work new <ws> --import-shell-config`;
@@ -130,10 +130,10 @@ mod tests {
     #[test]
     fn default_dockerfile_bakes_terminal_and_locale() {
         use super::DEFAULT_DOCKERFILE;
-        // Terminfo (xterm-256color / tmux-256color) + a UTF-8 locale + a sane
-        // default TERM must be baked in: `docker exec` does not propagate the
-        // host environment, so without these TUI agents and nested tmux render
-        // escape codes as literal text.
+        // Terminfo (xterm-256color) + a UTF-8 locale + a sane default TERM
+        // must be baked in: `docker exec` does not propagate the host
+        // environment, so without these TUI agents and the in-container
+        // multiplexer (herdr) render escape codes as literal text.
         assert!(DEFAULT_DOCKERFILE.contains("ncurses-term"));
         assert!(DEFAULT_DOCKERFILE.contains("locales"));
         assert!(DEFAULT_DOCKERFILE.contains("TERM=xterm-256color"));

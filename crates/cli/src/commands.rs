@@ -19,7 +19,7 @@ pub fn new(
     git_name: Option<String>,
     git_email: Option<String>,
     import_shell_config: Option<String>,
-    import_tmux_config: Option<String>,
+    import_herdr_config: Option<String>,
     import_starship_config: Option<String>,
     import_dotfiles: Option<std::path::PathBuf>,
     use_author_default: bool,
@@ -36,7 +36,7 @@ pub fn new(
         git_name,
         git_email,
         to_src(import_shell_config),
-        to_src(import_tmux_config),
+        to_src(import_herdr_config),
         to_src(import_starship_config),
         import_dotfiles,
         use_author_default,
@@ -59,17 +59,6 @@ pub fn shell(name: &str) -> Result<()> {
 pub fn attach(name: &str) -> Result<()> {
     let ws = work_core::workspace::Workspace::open(name)?;
     ws.shell()
-}
-/// `work tab <ws> [--name <n>]`: open a new in-container tmux window and attach.
-pub fn tab(ws: &str, name: Option<&str>) -> Result<()> {
-    let ws = Workspace::open(ws)?;
-    ws.tab(name)
-}
-
-/// `work tabs <ws>`: list the in-container tmux windows ("tabs").
-pub fn tabs(ws: &str) -> Result<()> {
-    let ws = Workspace::open(ws)?;
-    ws.list_tabs()
 }
 
 pub fn start(name: &str) -> Result<()> {
@@ -179,11 +168,6 @@ pub fn dashboard(yes: bool) -> Result<()> {
     crate::tui::run(yes)
 }
 
-/// `work resume` / `work all`: host tmux cockpit tiling running sessions.
-pub fn resume() -> Result<()> {
-    workspace::resume()
-}
-
 pub fn doctor() -> Result<ExitCode> {
     let engine = engine::detect()?;
     let results = doctor::run(&*engine)?;
@@ -291,7 +275,7 @@ pub fn config_edit(name: &str, yes: bool) -> Result<()> {
 
 struct UpdateSrcs {
     shell: Option<ImportSrc>,
-    tmux: Option<ImportSrc>,
+    herdr: Option<ImportSrc>,
     starship: Option<ImportSrc>,
     dotfiles: Option<std::path::PathBuf>,
 }
@@ -308,7 +292,7 @@ pub fn update(args: &UpdateArgs) -> Result<()> {
     };
     let srcs = UpdateSrcs {
         shell: to_src(&args.import_shell_config),
-        tmux: to_src(&args.import_tmux_config),
+        herdr: to_src(&args.import_herdr_config),
         starship: to_src(&args.import_starship_config),
         dotfiles: args.import_dotfiles.clone(),
     };
@@ -330,7 +314,7 @@ pub fn update(args: &UpdateArgs) -> Result<()> {
             match Workspace::open(name).and_then(|ws| {
                 ws.update(
                     srcs.shell.clone(),
-                    srcs.tmux.clone(),
+                    srcs.herdr.clone(),
                     srcs.starship.clone(),
                     srcs.dotfiles.clone(),
                     args.dry_run,
@@ -361,7 +345,7 @@ pub fn update(args: &UpdateArgs) -> Result<()> {
     let ws = Workspace::open(name)?;
     let rep = ws.update(
         srcs.shell,
-        srcs.tmux,
+        srcs.herdr,
         srcs.starship,
         srcs.dotfiles,
         args.dry_run,
@@ -454,9 +438,9 @@ pub struct NewArgs {
     /// Copy your shell rc into the workspace (no value = detected ~/.zshrc/~/.bashrc).
     #[arg(long = "import-shell-config", num_args = 0..=1, default_missing_value = "")]
     pub import_shell_config: Option<String>,
-    /// Copy a .tmux.conf into the workspace (no value = ~/.tmux.conf).
-    #[arg(long = "import-tmux-config", num_args = 0..=1, default_missing_value = "")]
-    pub import_tmux_config: Option<String>,
+    /// Copy a herdr config.toml into the workspace (no value = ~/.config/herdr/config.toml).
+    #[arg(long = "import-herdr-config", num_args = 0..=1, default_missing_value = "")]
+    pub import_herdr_config: Option<String>,
     /// Copy a starship.toml into the workspace (no value = ~/.config/starship.toml).
     #[arg(long = "import-starship-config", num_args = 0..=1, default_missing_value = "")]
     pub import_starship_config: Option<String>,
@@ -482,9 +466,9 @@ pub struct UpdateArgs {
     /// Copy your shell rc into the workspace (no value = detected rc).
     #[arg(long = "import-shell-config", num_args = 0..=1, default_missing_value = "")]
     pub import_shell_config: Option<String>,
-    /// Copy a .tmux.conf into the workspace (no value = ~/.tmux.conf).
-    #[arg(long = "import-tmux-config", num_args = 0..=1, default_missing_value = "")]
-    pub import_tmux_config: Option<String>,
+    /// Copy a herdr config.toml into the workspace (no value = ~/.config/herdr/config.toml).
+    #[arg(long = "import-herdr-config", num_args = 0..=1, default_missing_value = "")]
+    pub import_herdr_config: Option<String>,
     /// Copy a starship.toml into the workspace (no value = ~/.config/starship.toml).
     #[arg(long = "import-starship-config", num_args = 0..=1, default_missing_value = "")]
     pub import_starship_config: Option<String>,

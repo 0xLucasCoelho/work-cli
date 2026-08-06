@@ -21,11 +21,6 @@ pub fn network(ws: &str) -> String {
 pub fn container(ws: &str) -> String {
     format!("work-{ws}")
 }
-/// In-container tmux session name for a workspace. Equals the workspace name, so
-/// `tmux ls` and the status bar inside a container reflect its identity. PURE.
-pub fn session(ws: &str) -> &str {
-    ws
-}
 
 /// Validate a workspace name. Lowercase `[a-z0-9][a-z0-9-]*`, length 1..=40, not reserved.
 pub fn validate_name(name: &str) -> Result<(), crate::error::NameError> {
@@ -53,11 +48,6 @@ pub fn validate_name(name: &str) -> Result<(), crate::error::NameError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn session_name_is_the_workspace_name() {
-        assert_eq!(session("acme"), "acme");
-    }
 
     #[test]
     fn reserved_includes_every_cli_verb() {

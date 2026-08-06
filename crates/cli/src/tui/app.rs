@@ -2,10 +2,9 @@
 //! concurrent work rm/new (changes length AND order) can't shift the cursor onto
 //! the wrong workspace. No IO, no rendering.
 
-use std::collections::HashMap;
 #[cfg(test)]
 use work_core::engine::ContainerState;
-use work_core::workspace::{WindowRow, WorkspaceStatus};
+use work_core::workspace::WorkspaceStatus;
 
 #[derive(Clone, Copy)]
 pub(crate) enum ConfirmAction {
@@ -21,12 +20,11 @@ pub(crate) struct Confirm {
     pub blurb: String,
 }
 /// A deferred action to run after the TUI tears down (so it gets a normal TTY).
-/// Attach/NewTab both start an interactive shell; Create builds a workspace and
-/// then attaches to it.
+/// Attach starts an interactive shell; Create builds a workspace and then
+/// attaches to it.
 pub(crate) enum PendingAction {
     Attach(String),
     Create(String),
-    NewTab(String),
 }
 
 /// Inline text-input sub-mode (e.g. entering a new-workspace name). While `Some`
@@ -43,11 +41,9 @@ pub(crate) struct App {
     quit: bool,
     status: Option<String>,
     confirm: Option<Confirm>, // pending destructive-op confirm (s/x/d gate)
-    pending: Option<PendingAction>, // deferred action (attach/create/new-tab) after TUI teardown
+    pending: Option<PendingAction>, // deferred action (attach/create) after TUI teardown
     mode: Option<Mode>,       // active inline text-input sub-mode, if any
     buf: String,              // text buffer for the active input mode
-    expanded: Option<String>, // workspace NAME that's expanded to show its tabs
-    tabs: HashMap<String, Vec<WindowRow>>, // cached tab rows per workspace NAME
 }
 
 impl App {
@@ -62,8 +58,6 @@ impl App {
             mode: None,
             buf: String::new(),
             confirm: None,
-            expanded: None,
-            tabs: HashMap::new(),
         }
     }
 
@@ -192,9 +186,6 @@ impl App {
     pub(crate) fn request_create(&mut self, name: String) {
         self.pending = Some(PendingAction::Create(name));
     }
-    pub(crate) fn request_tab(&mut self, name: String) {
-        self.pending = Some(PendingAction::NewTab(name));
-    }
     pub(crate) fn pending(&mut self) -> &mut Option<PendingAction> {
         &mut self.pending
     }
@@ -221,39 +212,6 @@ impl App {
     }
     pub(crate) fn buf_take(&mut self) -> String {
         std::mem::take(&mut self.buf)
-    }
-
-    /// Toggle the expanded state of the workspace under the cursor. Expanding a
-    /// second workspace collapses the first (only one expanded at a time). With
-    /// nothing selected this is a no-op.
-    pub(crate) fn toggle_expand(&mut self) {
-        let Some(name) = self.selected_name() else {
-            return;
-        };
-        self.expanded = if self.expanded.as_deref() == Some(name) {
-            None
-        } else {
-            Some(name.to_string())
-        };
-    }
-
-    /// Name of the workspace whose tab rows are currently shown, if any.
-    pub(crate) fn expanded_name(&self) -> Option<&str> {
-        self.expanded.as_deref()
-    }
-
-    /// Cached tab rows for the expanded workspace, if any. `Some([])` is a loaded
-    /// workspace with zero tabs; `None` means "not loaded yet" (Task 3.2 fetches).
-    pub(crate) fn expanded_tabs(&self) -> Option<&[WindowRow]> {
-        self.expanded
-            .as_deref()
-            .and_then(|n| self.tabs.get(n))
-            .map(|v| v.as_slice())
-    }
-
-    /// Cache (or replace) the tab rows for a workspace, keyed by NAME.
-    pub(crate) fn set_tabs(&mut self, ws: &str, tabs: Vec<WindowRow>) {
-        self.tabs.insert(ws.to_string(), tabs);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -313,30 +271,6 @@ mod tests {
         app.move_up();
         assert_eq!(app.selected_name(), Some("acme"));
     }
-
-    #[test]
-    fn toggle_expand_flips_expanded_and_tabs() {
-        use work_core::workspace::WindowRow;
-        let mut app = App::new();
-        app.set_model(vec![ws("acme"), ws("blog")]);
-        assert_eq!(app.expanded_name(), None);
-        app.toggle_expand(); // expands the selected (acme)
-        assert_eq!(app.expanded_name(), Some("acme"));
-        app.set_tabs(
-            "acme",
-            vec![WindowRow {
-                index: "1".into(),
-                name: "build".into(),
-                panes: "1".into(),
-                active: true,
-                command: "zsh".into(),
-            }],
-        );
-        assert_eq!(app.expanded_tabs().map(|t| t.len()), Some(1));
-        app.toggle_expand(); // collapses
-        assert_eq!(app.expanded_name(), None);
-    }
-
     #[test]
     fn visible_names_all_when_no_filter() {
         let mut app = App::new();

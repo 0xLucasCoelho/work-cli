@@ -7,7 +7,7 @@ single machine, with a structural guarantee against cross-context data breach.
 `work` gives each context its own container, named volume (mounted at
 `/home/dev`), and dedicated bridge network. Code, AI agents, and credentials in
 one workspace **physically cannot reach another**. You drive them all from one
-terminal: attach to a persistent session, or tile all live sessions in a cockpit.
+terminal: attach to a persistent in-container session.
 
 > `work` is a **session + isolation manager**. It does **not** install tools and
 > does **not** manage credentials. You install and authenticate your own tools
@@ -21,8 +21,8 @@ terminal: attach to a persistent session, or tile all live sessions in a cockpit
 
 - A container engine: **OrbStack** (recommended on macOS), **Docker**, **Podman**,
   or **Colima**. `work` auto-detects in that order.
-- `tmux` on the host (only needed for `work resume`/`work all`). The in-container
-  `tmux` (and `zsh`/`bash`) ships inside the base image.
+- The in-container `herdr` multiplexer (and `zsh`/`bash`) ships inside the base
+  image.
 - macOS today; Linux shares the same codebase.
 
 ## Install
@@ -102,8 +102,8 @@ work new acme --git-name "Jane Doe" --git-email jane@acme.io
 
 # 2. Attach to its persistent session.
 work acme
-#   -> you are `dev` in /home/dev, inside an isolated Linux container, in a
-#      tmux session named `work`. Start an agent, then detach with Ctrl-b d
+#   -> you are `dev` in /home/dev, in an isolated Linux container, attached to
+#      its in-container herdr. Start an agent, then detach with Ctrl-b q
 #      (or just close the terminal) — it keeps running.
 
 # 3. Inside the container, install & log into YOUR OWN tools.
@@ -113,7 +113,6 @@ npm i -g @anthropic-ai/claude-code && claude   # example
 # 4. List / control / remove your workspaces from the host.
 work ls                 # WORKSPACE  STATE    SESSION
                         # acme       running  live
-work resume             # cockpit: tile every running session (host prefix Ctrl-a)
 work stop acme          # stop the container (ends its session; files persist)
 work start acme         # start again
 work rm acme            # remove container+net+config, KEEP the volume
@@ -126,42 +125,17 @@ dotfiles, and your logins live in that workspace's volume and survive reboots.
 
 ## Persistent sessions
 
-`work <ws>` attaches to (or creates) a **tmux session named `work` inside the
-container**. Anything you start there — shells, editors, AI agents — survives
-detaching, closing the terminal/tab, and host sleep. It does **not** survive
-`work stop` (an explicit power-off: running processes end, but files and on-disk
-state in the volume persist) or `work rm`.
+`work <ws>` attaches to the **in-container herdr server** (launching it on first
+run). Anything you start there — shells, editors, AI agents — survives detaching,
+closing the terminal/tab, and host sleep. It does **not** survive `work stop` (an
+explicit power-off: running processes end, but files and on-disk state in the
+volume persist) or `work rm`.
 
-- **Detach:** `Ctrl-b d`, or just close the terminal.
+- **Detach:** `Ctrl-b q`, or just close the terminal.
 - **Reattach:** `work <ws>` again.
-- **Close the session:** `exit` at its prompt.
-
-### Opening more tabs (`work tab`)
-
-`work <ws>` resumes into the *existing* session (where you left off). To open an
-**additional** terminal tab in the same workspace — each its own persistent tmux
-window — use `work tab`:
-
-```bash
-work tab acme                # open a new tab in `acme` and attach to it
-work tab acme --name build   # ...named "build" (shows in `work tabs` / the tmux bar)
-work tabs acme               # list the workspace's tabs (index, name, panes, active, cmd)
-```
-
-Each tab is a tmux window in the one in-container session: it survives closing
-the terminal (detach) but not `work stop`. Switch tabs inside an attached session
-with `Ctrl-b <idx>` (or `Ctrl-b n` / `Ctrl-b p`). Opening a tab makes it the
-session's active window, so other attached terminals move to it too — a tmux
-session shares one active window across clients (same as `Ctrl-b c`).
-
-## The cockpit (`work resume`)
-
-`work resume` (alias: `work all`) opens one **host** tmux session with a window
-per **running** workspace, each attached to that container's session. The host
-prefix is **`Ctrl-a`** so it doesn't clash with the in-container `Ctrl-b`:
-`Ctrl-a <window>` switches workspaces, `Ctrl-a d` detaches the cockpit. Stopped
-workspaces are listed in a note. No path is created between containers — each
-window is an isolated client into one container on its own network.
+- **Tabs & panes:** open and switch them with herdr's own sidebar and prefix
+  (`Ctrl-b c` for a new tab). Each workspace runs one herdr server, shared across
+  every attached client — run `work <ws>` again to add a second terminal.
 
 ## Familiarity (optional)
 
@@ -171,7 +145,7 @@ inside the container. You can optionally seed a verbatim copy of your own config
 ```bash
 work new acme --import-shell-config            # copies ~/.zshrc (or ~/.bashrc)
 work new acme --import-shell-config ~/my.zshrc # copies that file -> /home/dev/.zshrc
-work new acme --import-tmux-config             # copies ~/.tmux.conf -> /home/dev/.tmux.conf
+work new acme --import-herdr-config           # copies a herdr config.toml into the workspace
 work new acme --import-starship-config          # copies ~/.config/starship.toml -> /home/dev/.config/starship.toml
 work new acme --import-dotfiles ~/dotfiles        # recursively copies that dir -> /home/dev
 work new acme --default                        # seed the repo's bundled templates/ dotfiles
@@ -204,7 +178,7 @@ work update --all           # re-sync every workspace
 work update acme --dry-run  # preview which files would change; write nothing
 ```
 
-It overwrites only **managed** config files (`.zshrc`, `.tmux.conf`,
+It overwrites only **managed** config files (`.zshrc`, `.config/herdr/config.toml`,
 `.config/…`); your projects, repos, and agent state in the volume are never
 touched. Source resolution mirrors `work new`: explicit `--import-*` flags →
 global config defaults → the embedded `templates/`. Each run prints what changed
@@ -226,10 +200,8 @@ isolated environment:
 - **Default prompt.** With no `--import-shell-config`, the default shell (zsh) gets
   a minimal prompt that shows the workspace: `⬡ acme ~/proj %#`. Import your own rc
   and it wins verbatim. (A bash workspace keeps Debian's default `~/.bashrc`.)
-- **Workspace-named session.** The in-container tmux session is named after the
-  workspace (`tmux ls` shows `acme`, not `work`), the window is named `<ws>`, and
-  the terminal tab is titled `work:<ws>`. Existing `work`-named sessions are renamed
-  in place (lossless — running shells/agents survive) on the next attach.
+- **Named terminal tab.** Each attach titles your terminal tab `work:<ws>`, so
+  multiple workspaces are easy to tell apart at a glance.
 
 ### The `[Docker]` marker (Starship)
 
@@ -269,7 +241,7 @@ each time? Build a personal image that extends the isolation-safe base:
    `default_image = "my-work:latest"` in `~/.config/work/config.toml`.
 
 `FROM work-base:latest` preserves every invariant `work doctor` checks (non-root
-`dev` @ `/home/dev`, tmux/zsh/bash). Bake tool **binaries** in (system-wide, e.g.
+`dev` @ `/home/dev`, herdr/zsh/bash). Bake tool **binaries** in (system-wide, e.g.
 `/usr/local/bin`); bring your `~/.zshrc` per-workspace via `--import-shell-config`
 — the volume overlays `/home/dev`, so image-baked rc files get hidden.
 
@@ -330,14 +302,11 @@ work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 
 | Command | Effect |
 |---|---|
-| `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-tmux-config [<path>]`, `--import-starship-config [<path>]`, `--import-dotfiles <dir>`, `--default`. |
-| `work <ws>` | Attach to (or create) the persistent in-container session. `Ctrl-b d` detaches. |
-| `work tab <ws> [--name <n>]` | Open a new tmux window ("tab") in the workspace's session and attach. Each call = one persistent window; becomes the session's active window. |
-| `work tabs <ws>` | List the workspace's tmux windows (index, name, panes, active, command). |
+| `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-herdr-config [<path>]`, `--import-starship-config [<path>]`, `--import-dotfiles <dir>`, `--default`. |
+| `work <ws>` | Attach to the in-container herdr server (launches it on first run). `Ctrl-b q` detaches. |
 | `work ls` | List workspaces with state and session liveness (`live`/`—`). |
 | `work start <ws>` / `work stop <ws>` | Lifecycle. `stop` ends the session (warns if one is live). |
 | `work stop-all` | Stop every workspace. |
-| `work resume` / `work all` | Cockpit: tile every running session in a host tmux (`Ctrl-a`). |
 | `work rm <ws>` | Remove container + network + config, **keep** the volume. |
 | `work rm <ws> --purge` | Also delete the volume (irreversible). Needs `--yes`. |
 | `work fwd <ws> <port>` | (opt-in) forward a host port into a workspace for your own logins. |
@@ -366,7 +335,7 @@ and echo.
 Non-secret metadata lives under `~/.config/work/`:
 
 ```
-~/.config/work/config.toml              # default_image, import_shell_config, import_tmux_config, import_starship_config, import_dotfiles
+~/.config/work/config.toml              # default_image, import_shell_config, import_herdr_config, import_starship_config, import_dotfiles
 ~/.config/work/workspaces/<ws>.toml     # per-workspace: image, git identity, shell, …
 ```
 

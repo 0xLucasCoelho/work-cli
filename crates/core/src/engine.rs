@@ -79,10 +79,11 @@ pub trait Engine: Send + Sync {
     /// installing a shim under `/usr/local/bin`). Mirrors the `--user root`
     /// pattern in seed_file/seed_dir, but as a general exec.
     fn exec_root(&self, name: &str, cmd: &[&str]) -> Result<()>;
-    /// True iff container `name` has a tmux server with `session`. Returns
-    /// `false` (NOT an error) when the container is missing/stopped or the
-    /// session is absent — so `ls`/`stop`/`rm` never choke on a downed box.
-    fn session_exists(&self, name: &str, session: &str) -> Result<bool>;
+    /// True iff container `name` has a live in-container multiplexer runtime
+    /// (the headless herdr server). Returns `false` (NOT an error) when the
+    /// container is missing/stopped or the server is absent — so `ls`/`stop`/
+    /// `rm` never choke on a downed box.
+    fn runtime_up(&self, name: &str) -> Result<bool>;
     /// Copy host file `src` into container `name` at `dest`, owned by `dev`.
     /// `docker cp` + `chown dev:dev` (as root). Creates no host bind-mount.
     fn seed_file(&self, name: &str, src: &Path, dest: &str) -> Result<()>;
@@ -369,7 +370,7 @@ impl Engine for DockerCli {
         // and render Nerd Font glyphs. `docker exec` does not propagate the
         // host environment: without COLORTERM apps degrade below truecolor,
         // and without NERD_FONTS=1 agents like omp fall back to ASCII glyphs
-        // because they see TERM_PROGRAM=tmux instead of the host terminal.
+        // because the in-container multiplexer hides the host terminal from them.
         for var in TERMINAL_ENV_TO_FORWARD {
             if let Ok(val) = std::env::var(var) {
                 c.arg("-e").arg(format!("{var}={val}"));
@@ -416,22 +417,26 @@ impl Engine for DockerCli {
         }
         Ok(())
     }
-    fn session_exists(&self, name: &str, session: &str) -> Result<bool> {
-        // Any non-zero exit (container missing / not running / no session) -> false.
-        let code = self
+    fn runtime_up(&self, name: &str) -> Result<bool> {
+        // `herdr status server` reports liveness on stdout and exits 0 whether
+        // the server is up or not, so parse the output rather than the exit
+        // code. Any failure (container missing/stopped, herdr absent) -> false,
+        // never an error, so `ls`/`stop`/`rm` never choke on a downed box.
+        let out = self
             .cmd()
-            .args(["exec", name, "tmux", "has-session", "-t", session])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        Ok(code.success())
+            .args(["exec", name, "herdr", "status", "server"])
+            .output()?;
+        if !out.status.success() {
+            return Ok(false);
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).contains("status: running"))
     }
     fn seed_file(&self, name: &str, src: &Path, dest: &str) -> Result<()> {
         let src_s = src.to_string_lossy();
         let target = format!("{name}:{dest}");
         // Ensure dest's parent dir exists (e.g. /home/dev/.config for starship.toml);
         // `docker cp` won't create intermediate dirs. Idempotent — /home/dev exists
-        // for rc/.tmux.conf seeds, so this is a no-op there.
+        // for rc seeds, so this is a no-op there.
         if let Some(parent) = std::path::Path::new(dest).parent() {
             if !parent.as_os_str().is_empty() {
                 let parent_s = parent.to_string_lossy();
@@ -638,11 +643,11 @@ pub fn build_image_at(
 /// (Claude Code, omp, …) detect the host's real color depth. `docker exec`
 /// does not propagate the host environment, and `COLORTERM` is the de-facto
 /// signal apps check for truecolor — without it they degrade below what the
-/// terminal can render. (TERM/TERM_PROGRAM are set by tmux itself, not us.)
+/// terminal can render. (TERM/TERM_PROGRAM are set by the multiplexer itself, not us.)
 const TERMINAL_ENV_TO_FORWARD: &[&str] = &["COLORTERM"];
 /// Env vars to unconditionally inject into every workspace `exec` (not copied
 /// from the host). `NERD_FONTS=1` forces Nerd Font glyph rendering in agents
-/// like omp, whose auto-detection fails inside tmux (TERM_PROGRAM=tmux).
+/// like omp, whose auto-detection fails inside the in-container multiplexer.
 /// Belt-and-suspenders: the same value is baked at `docker run` time (see
 /// `workspace::run_opts`), but forwarding it on every `exec` also covers
 /// containers created before that fix landed.
@@ -663,7 +668,7 @@ mod tests {
     #[test]
     fn terminal_env_hardcoded_forces_nerd_fonts() {
         // NERD_FONTS=1 must be injected on every exec so agents like omp
-        // render Nerd Font glyphs even when TERM_PROGRAM=tmux hides the host
+        // render Nerd Font glyphs even when the in-container multiplexer hides the host
         // terminal from their auto-detection.
         assert!(TERMINAL_ENV_HARDCODED.contains(&("NERD_FONTS", "1")));
     }
