@@ -10,9 +10,9 @@ another. Security reports are taken seriously.
 report privately via one of:
 
 - **GitHub Security Advisory** (preferred): go to
-  [Security › Advisories › Report a vulnerability](https://github.com/coelhucas-dev/work-cli/security/advisories/new),
+  [Security › Advisories › Report a vulnerability](https://github.com/0xlucascoelho/work-cli/security/advisories/new),
   or
-- **Email** the maintainer (add a private contact address here).
+- **Email** the maintainer at contact@lucascoelho.ai.
 
 Please include:
 
@@ -51,3 +51,7 @@ These are explicitly **not** part of `work`'s threat model (see
 Run `work doctor` — it enforces, per workspace: a unique dedicated network, only
 its own home volume mounted, non-root user, image matching config, and no
 published host ports.
+
+For the full setup walkthrough, the threat model, and the exact `docker run`
+flags that enforce each invariant, see
+[`docs/SETUP_AND_ISOLATION.md`](docs/SETUP_AND_ISOLATION.md).

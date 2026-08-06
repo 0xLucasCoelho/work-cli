@@ -14,7 +14,7 @@ terminal: attach to a persistent session, or tile all live sessions in a cockpit
 > (Claude Code, Codex, z.ai, Gemini CLI, …) inside each container. `work`
 > provides the sandbox; it never touches your secrets.
 
-[![CI](https://github.com/coelhucas-dev/work-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/coelhucas-dev/work-cli/actions/workflows/ci.yml)
+[![CI](https://github.com/0xlucascoelho/work-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/0xlucascoelho/work-cli/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Requirements
@@ -30,7 +30,7 @@ terminal: attach to a persistent session, or tile all live sessions in a cockpit
 **Homebrew (recommended, macOS):**
 
 ```bash
-brew install coelhucas-dev/tap/work
+brew install 0xlucascoelho/tap/work
 ```
 
 Upgrade with `brew upgrade work`.
@@ -38,19 +38,19 @@ Upgrade with `brew upgrade work`.
 **One-line script (macOS + Linux):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/coelhucas-dev/work-cli/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/0xlucascoelho/work-cli/main/install.sh | sh
 ```
 
 **cargo-binstall** (if you have a Rust toolchain):
 
 ```bash
-cargo binstall --git https://github.com/coelhucas-dev/work-cli work
+cargo binstall --git https://github.com/0xlucascoelho/work-cli work
 ```
 
 **From source** (developers):
 
 ```bash
-cargo install --git https://github.com/coelhucas-dev/work-cli
+cargo install --git https://github.com/0xlucascoelho/work-cli
 # or, from a clone:
 cargo install --path .
 ```
@@ -290,6 +290,10 @@ read sibling directories. `work` enforces isolation at the OS container boundary
 `work doctor` verifies all of the above and fails loudly if any invariant is
 violated (e.g. a container that somehow shares a network, mounts a foreign
 volume, runs as root, or publishes a host port).
+
+For the full setup walkthrough — the exact `docker run` that builds the wall,
+the resource naming scheme, the threat model, and how to verify each invariant —
+see [`docs/SETUP_AND_ISOLATION.md`](docs/SETUP_AND_ISOLATION.md).
 
 ## Logging into tools that need a browser (OAuth)
 
