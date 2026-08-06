@@ -33,6 +33,18 @@ pub struct HardeningProbe {
     pub image: String,
     pub configured_image: String,
     pub ports_json: String,
+    /// `{{.HostConfig.CapDrop}}` — expect to contain "ALL".
+    pub cap_drop: String,
+    /// `{{json .HostConfig.SecurityOpt}}` — expect "no-new-privileges".
+    pub security_opt: String,
+    /// `{{.Image}}` (the sha the container actually runs). `None` if unreadable.
+    pub running_image_id: Option<String>,
+    /// The configured tag's image id RE-RESOLVED at check time
+    /// (`docker image inspect --format {{.Id}} <cfg.image>`). Compared against
+    /// `running_image_id` to detect tag drift (a rebuilt work-base:latest).
+    pub resolved_image_id: Option<String>,
+    /// True iff the container carries the work managed label.
+    pub managed_label: bool,
 }
 
 /// A single workspace is isolated iff:
@@ -185,6 +197,61 @@ pub fn analyze_hardening(p: &HardeningProbe) -> Vec<CheckResult> {
         },
     });
 
+    let caps_ok = p.cap_drop.contains("ALL");
+    out.push(CheckResult {
+        label: format!("{}:cap-drop", p.ws),
+        ok: caps_ok,
+        detail: if caps_ok {
+            "cap-drop=ALL".into()
+        } else {
+            format!("expected cap-drop ALL, found '{}'", p.cap_drop)
+        },
+    });
+
+    let nnp_ok = p.security_opt.contains("no-new-privileges");
+    out.push(CheckResult {
+        label: format!("{}:no-new-privileges", p.ws),
+        ok: nnp_ok,
+        detail: if nnp_ok {
+            "no-new-privileges set".into()
+        } else {
+            format!("expected no-new-privileges, found '{}'", p.security_opt)
+        },
+    });
+
+    let label_ok = p.managed_label;
+    out.push(CheckResult {
+        label: format!("{}:managed", p.ws),
+        ok: label_ok,
+        detail: if label_ok {
+            "work-managed label present".into()
+        } else {
+            "missing work-managed label — recreate it: `work harden <ws>`".into()
+        },
+    });
+
+    // Image drift: compare the image the container actually runs against the
+    // configured tag's CURRENT resolution (re-resolved here, at check time).
+    // Comparing against a digest recorded at create time would be tautological —
+    // a container pins an image id, not a tag — so a locally-rebuilt
+    // work-base:latest (tag now -> id B, container still runs id A) would never
+    // be flagged. Re-resolving the tag here catches exactly that.
+    if let (Some(running), Some(resolved)) = (&p.running_image_id, &p.resolved_image_id) {
+        let drift_ok = running == resolved;
+        out.push(CheckResult {
+            label: format!("{}:image-drift", p.ws),
+            ok: drift_ok,
+            detail: if drift_ok {
+                "running image matches the configured tag".into()
+            } else {
+                format!(
+                    "container runs {running}, but configured image '{}' now resolves to \
+                     {resolved} — the tag was rebuilt/repointed; run `work harden {}` to recreate",
+                    p.configured_image, p.ws
+                )
+            },
+        });
+    }
     out
 }
 
@@ -235,33 +302,97 @@ pub fn run(engine: &dyn Engine) -> Result<Vec<CheckResult>> {
                 });
                 results.push(r);
 
-                // Hardening (only meaningful when the container exists).
-                if let Ok(cfg) = config::load_workspace(name) {
-                    let restart = engine
-                        .inspect_format(&ctr, "{{.HostConfig.RestartPolicy.Name}}")
-                        .unwrap_or_default();
-                    let user = engine
-                        .inspect_format(&ctr, "{{.Config.User}}")
-                        .unwrap_or_default();
-                    let image = engine
-                        .inspect_format(&ctr, "{{.Config.Image}}")
-                        .unwrap_or_default();
-                    let ports = engine
-                        .inspect_format(&ctr, "{{json .NetworkSettings.Ports}}")
-                        .unwrap_or_else(|_| "{}".into());
-                    results.extend(analyze_hardening(&HardeningProbe {
-                        ws: name.clone(),
-                        restart_policy: restart,
-                        user,
-                        image,
-                        configured_image: cfg.image,
-                        ports_json: ports,
-                    }));
-                }
+                // Hardening (only meaningful when the container exists). An
+                // unreadable config is a FINDING, not a silent skip — otherwise a
+                // bad merge would disable every hardening check invisibly.
+                let cfg = match config::load_workspace(name) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        results.push(CheckResult {
+                            label: format!("{name}:config"),
+                            ok: false,
+                            detail: format!("config unreadable, hardening checks skipped: {e}"),
+                        });
+                        continue;
+                    }
+                };
+                let restart = engine
+                    .inspect_format(&ctr, "{{.HostConfig.RestartPolicy.Name}}")
+                    .unwrap_or_default();
+                let user = engine
+                    .inspect_format(&ctr, "{{.Config.User}}")
+                    .unwrap_or_default();
+                let image = engine
+                    .inspect_format(&ctr, "{{.Config.Image}}")
+                    .unwrap_or_default();
+                // A port-inspect failure is a finding, not "0 ports = fine".
+                let ports = match engine.inspect_format(&ctr, "{{json .NetworkSettings.Ports}}") {
+                    Ok(p) => p,
+                    Err(e) => {
+                        results.push(CheckResult {
+                            label: format!("{name}:ports"),
+                            ok: false,
+                            detail: format!("could not inspect ports: {e}"),
+                        });
+                        continue;
+                    }
+                };
+                let cap_drop = engine
+                    .inspect_format(&ctr, "{{.HostConfig.CapDrop}}")
+                    .unwrap_or_default();
+                let security_opt = engine
+                    .inspect_format(&ctr, "{{json .HostConfig.SecurityOpt}}")
+                    .unwrap_or_default();
+                let running_image_id = engine
+                    .inspect_format(&ctr, "{{.Image}}")
+                    .ok()
+                    .filter(|s| !s.is_empty());
+                let resolved_image_id = engine.image_id(&cfg.image).ok().filter(|s| !s.is_empty());
+                let label_fmt = format!("{{{{index .Config.Labels \"{}\"}}}}", naming::LABEL_KEY);
+                let managed_label = engine
+                    .inspect_format(&ctr, &label_fmt)
+                    .unwrap_or_default()
+                    .trim()
+                    == "true";
+                results.extend(analyze_hardening(&HardeningProbe {
+                    ws: name.clone(),
+                    restart_policy: restart,
+                    user,
+                    image,
+                    configured_image: cfg.image,
+                    ports_json: ports,
+                    cap_drop,
+                    security_opt,
+                    running_image_id,
+                    resolved_image_id,
+                    managed_label,
+                }));
             }
         }
     }
 
+    // Forwarder containers (work fwd / work browse) share a workspace network
+    // but aren't workspaces. Surface them so an orphaned bridge — e.g. a parent
+    // `work browse` kill -9'd mid-loop, leaving a still-running `--rm` container
+    // the daemon won't auto-remove — is visible instead of invisible.
+    for ctr in engine.list_containers().unwrap_or_default() {
+        if ctr.starts_with("work-fwd-") || ctr.starts_with("work-browse-") {
+            let managed = engine
+                .object_has_label(&ctr, "container", naming::LABEL_KEY)
+                .unwrap_or(false);
+            results.push(CheckResult {
+                label: format!("forwarder:{ctr}"),
+                ok: managed,
+                detail: if managed {
+                    "managed forwarder running (stop its `work fwd`/`work browse` to clear)".into()
+                } else {
+                    format!(
+                        "unmanaged forwarder — likely an orphan; remove with `docker rm -f {ctr}`"
+                    )
+                },
+            });
+        }
+    }
     results.extend(analyze_cross_volume(&probes));
     Ok(results)
 }

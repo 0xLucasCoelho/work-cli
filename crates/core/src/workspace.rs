@@ -2,12 +2,12 @@
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
 use crate::config::{self, ImportSrc, WorkspaceConfig};
-use crate::engine::{ContainerState, Engine, RunOpts};
+use crate::doctor;
+use crate::engine::{ContainerState, Engine, HardenOpts, RunOpts};
 use crate::image;
 use crate::naming;
 
@@ -58,7 +58,37 @@ impl Workspace {
         naming::validate_name(name)?;
         let cfg = config::load_workspace(name)?;
         let engine = crate::engine::detect()?;
-        Ok(Self { cfg, engine })
+        let mut ws = Self { cfg, engine };
+        ws.verify_daemon()?;
+        Ok(ws)
+    }
+
+    /// Enforce that the active daemon matches the one this workspace was created
+    /// on. A workspace created on daemon A that later resolves to daemon B (a
+    /// changed DOCKER_HOST / context / a second Colima instance) is refused —
+    /// names are not an isolation boundary across daemons. `daemon_id == None`
+    /// (created before this field existed) is backfilled on first open, never a
+    /// hard failure; a daemon that won't report an ID is treated as unverified.
+    fn verify_daemon(&mut self) -> Result<()> {
+        let current = self.engine.daemon_id().unwrap_or_default();
+        if current.is_empty() {
+            return Ok(());
+        }
+        match &self.cfg.daemon_id {
+            None => {
+                self.cfg.daemon_id = Some(current);
+                let _ = config::save_workspace(&self.cfg);
+            }
+            Some(expected) if expected != &current => bail!(
+                "workspace '{}' was created on daemon {}, but the active engine now resolves to \
+                 {}. Switch back to the original engine/context before opening it.",
+                self.cfg.name,
+                expected,
+                current
+            ),
+            _ => {}
+        }
+        Ok(())
     }
 
     /// `work new <ws>`: create volume + network + container, persist config,
@@ -142,10 +172,24 @@ impl Workspace {
         let vol = naming::volume(name);
         let net = naming::network(name);
         let ctr = naming::container(name);
-        if !engine.volume_exists(&vol)? {
+        if engine.volume_exists(&vol)? {
+            if !engine.object_has_label(&vol, "volume", naming::LABEL_KEY)? {
+                bail!(
+                    "volume '{vol}' exists but isn't work-managed — refusing to reuse it. Remove \
+                     it manually (e.g. `docker volume rm {vol}`) if you know it's safe."
+                );
+            }
+        } else {
             engine.create_volume(&vol)?;
         }
-        if !engine.network_exists(&net)? {
+        if engine.network_exists(&net)? {
+            if !engine.object_has_label(&net, "network", naming::LABEL_KEY)? {
+                bail!(
+                    "network '{net}' exists but isn't work-managed — refusing to reuse it. Remove \
+                     it manually (e.g. `docker network rm {net}`) if you know it's safe."
+                );
+            }
+        } else {
             engine.create_network(&net)?;
         }
         // Recreate container if a stale one lingers.
@@ -154,6 +198,22 @@ impl Workspace {
         }
         let opts = run_opts(name, &image);
         engine.run(&opts)?;
+        // Persist the config as soon as the container exists — recording the
+        // daemon identity + resolved image id — so a later seeding failure leaves
+        // a visible (if bare) workspace rather than an orphaned container.
+        let daemon_id = engine.daemon_id().ok();
+        let image_digest = engine.image_id(&image).ok();
+        let cfg = WorkspaceConfig {
+            name: name.to_string(),
+            image,
+            git_name: git_name.clone(),
+            git_email: git_email.clone(),
+            shell: Some(shell),
+            daemon_id,
+            image_digest,
+            created_at: now_rfc3339(),
+        };
+        config::save_workspace(&cfg)?;
         // Browser bridge shim: install early so a brand-new workspace can
         // forward `xdg-open` calls. Idempotent; best-effort (warn, don't fail
         // workspace creation over a convenience shim).
@@ -163,11 +223,15 @@ impl Workspace {
         // templates via --default) so per-file imports below can still
         // override individual files like .zshrc.
         if let Some(dir) = &dotfiles_dir {
+            let staged = stage_allowed_dotfiles(dir)
+                .with_context(|| format!("staging dotfiles from {}", dir.display()))?;
             engine
-                .seed_dir(&ctr, dir, "/home/dev")
+                .seed_dir(&ctr, staged.path(), "/home/dev")
                 .with_context(|| format!("seeding dotfiles from {}", dir.display()))?;
             println!(
-                "⚠  Copied dotfiles from {} into '{name}'. Ensure they contain no secrets — they now live in that workspace's volume.",
+                "⚠  Copied ALLOWLISTED dotfiles from {} into '{name}'. Anything outside the \
+                 allowlist (.npmrc, .aws/, …) was skipped. Ensure staged files hold no secrets — \
+                 they now live in that workspace's volume.",
                 dir.display()
             );
         } else if seed_author_default {
@@ -188,16 +252,6 @@ impl Workspace {
         let shell_imported = seeds.iter().any(|(_, _, kind)| *kind == "shell");
         ensure_default_rc(&*engine, &ctr, rc, shell_imported)?;
 
-        let cfg = WorkspaceConfig {
-            name: name.to_string(),
-            image,
-            git_name: git_name.clone(),
-            git_email: git_email.clone(),
-            shell: Some(shell),
-            created_at: now_rfc3339(),
-        };
-        config::save_workspace(&cfg)?;
-
         let ws = Self { cfg, engine };
         ws.apply_git_identity()?;
         Ok(ws)
@@ -216,6 +270,26 @@ impl Workspace {
                 self.engine.start_container(&ctr)?;
             }
             ContainerState::Running => {}
+        }
+        self.verify_before_attach(&ctr)?;
+        Ok(())
+    }
+
+    /// Cheap isolation gate before attach: the container must be on its own
+    /// network and mount only its own volume. Catches drift a manual `docker
+    /// network connect` / cross-mounted volume introduces — `work doctor` would
+    /// flag it, but nothing previously checked the hot path, so every `work <ws>`
+    /// attached to a drifted container without complaint.
+    fn verify_before_attach(&self, ctr: &str) -> Result<()> {
+        let networks = self.engine.container_networks(ctr)?;
+        let mounts = self.engine.container_mounts(ctr)?;
+        let check = doctor::analyze_isolation(&self.cfg.name, &networks, &mounts);
+        if !check.ok {
+            bail!(
+                "workspace '{}' failed its isolation check before attach (run `work doctor`): {}",
+                self.cfg.name,
+                check.detail
+            );
         }
         Ok(())
     }
@@ -294,10 +368,16 @@ impl Workspace {
 
     /// True iff the container is up AND its in-container herdr server is live.
     /// Used by the destructive-op safety policy to decide whether a stop/rm/
-    /// recreate would actually lose live work.
-    pub fn has_live_session(&self) -> bool {
+    /// recreate would actually lose live work. Returns `Result`: a transient
+    /// inspect/runtime failure MUST surface, not resolve to `false` — callers
+    /// gate destructive ops on this and fail-open would skip the work-loss
+    /// prompt for a session that was actually live.
+    pub fn has_live_session(&self) -> Result<bool> {
         let ctr = naming::container(&self.cfg.name);
-        self.engine.runtime_up(&ctr).unwrap_or(false)
+        match self.engine.container_state(&ctr)? {
+            ContainerState::Running => Ok(self.engine.runtime_up(&ctr)?),
+            _ => Ok(false),
+        }
     }
 
     /// Apply optional git identity (user.name/user.email) inside the container.
@@ -317,7 +397,8 @@ impl Workspace {
     }
 
     /// Recreate this workspace's container from its current config (keeps the
-    /// volume + network). Used by `work config` when the image changes.
+    /// volume + network). Used by `work config` when the image changes and by
+    /// `work harden` to apply the current hardening flags to a stale container.
     pub fn recreate(&self) -> Result<()> {
         let ctr = naming::container(&self.cfg.name);
         if self.engine.container_exists(&ctr)? {
@@ -326,6 +407,14 @@ impl Workspace {
         ensure_image(&*self.engine, &self.cfg.image)?;
         let opts = run_opts(&self.cfg.name, &self.cfg.image);
         self.engine.run(&opts)?;
+        // Re-record the resolved image id (a rebuild can change it) so `doctor`
+        // detects future drift. Best-effort: a daemon that won't report it isn't
+        // worth failing a recreate over.
+        if let Ok(id) = self.engine.image_id(&self.cfg.image) {
+            let mut cfg = self.cfg.clone();
+            cfg.image_digest = Some(id);
+            let _ = config::save_workspace(&cfg);
+        }
         self.apply_git_identity()?;
         Ok(())
     }
@@ -350,7 +439,18 @@ impl Workspace {
         if purge && self.engine.volume_exists(&vol)? {
             self.engine.remove_volume(&vol)?;
         }
-        let _ = std::fs::remove_file(config::workspace_config_path(&self.cfg.name));
+        // Only drop the config once the container is genuinely gone, so a removal
+        // that no-op'd (a restart policy racing `rm -f`) leaves the workspace
+        // listed + re-removable instead of an invisible running box.
+        if !self.engine.container_exists(&ctr)? {
+            let _ = std::fs::remove_file(config::workspace_config_path(&self.cfg.name));
+        } else {
+            bail!(
+                "container {ctr} still present after removal — config kept so the workspace stays \
+                 visible; retry `work rm {}`",
+                self.cfg.name
+            );
+        }
         Ok(())
     }
     /// `work update`: re-seed managed config files into the running container in
@@ -408,10 +508,20 @@ impl Workspace {
             }
         }
 
-        // Tree to seed: an explicit dotfiles dir, else the embedded templates.
+        // Tree to seed: an explicit dotfiles dir — staged through the allowlist
+        // (never seed a user-provided tree verbatim) — else the embedded
+        // templates. Both the diff and the seed read the staged snapshot, closing
+        // the scan-then-copy TOCTOU a denylist has.
         let templates_tmp;
-        let tree_dir: Option<&Path> = match &dotfiles_dir {
-            Some(d) => Some(d.as_path()),
+        let staged: Option<tempfile::TempDir> = match dotfiles_dir.as_deref() {
+            Some(d) => Some(
+                stage_allowed_dotfiles(d)
+                    .with_context(|| format!("staging dotfiles from {}", d.display()))?,
+            ),
+            None => None,
+        };
+        let tree_dir: Option<&Path> = match &staged {
+            Some(s) => Some(s.path()),
             None => {
                 templates_tmp = Some(crate::templates::extract_to_tempdir()?);
                 Some(templates_tmp.as_ref().unwrap().path())
@@ -558,6 +668,7 @@ fn run_opts(name: &str, image: &str) -> RunOpts {
             ("BROWSER".into(), crate::browser::SHIM_DEST.into()),
             ("NERD_FONTS".into(), "1".into()),
         ],
+        harden: HardenOpts::default(),
     }
 }
 
@@ -639,6 +750,9 @@ pub fn browse(name: &str) -> Result<()> {
     println!("Browsing for {name} — login URLs also bridge their callback port to the host.");
     println!("(Ctrl-C to stop)");
     let opener = crate::browser::host_opener();
+    let mut guard = crate::browser::BrowseGuard::new(
+        std::env::var("WORK_BROWSE_CONFIRM").ok().as_deref() == Some("no"),
+    );
     let mut bridged: HashSet<u16> = HashSet::new();
     let mut fwd_names: Vec<String> = Vec::new();
     let result = browse_loop(
@@ -649,6 +763,7 @@ pub fn browse(name: &str) -> Result<()> {
         &opener,
         &mut bridged,
         &mut fwd_names,
+        &mut guard,
     );
     // Cleanup forwarders on normal/error exit. Ctrl-C is handled by the process
     // group receiving SIGINT -> each `docker run --rm` forwarder stops + removes.
@@ -660,6 +775,7 @@ pub fn browse(name: &str) -> Result<()> {
 
 /// Read URLs from the bridge FIFO forever; for each, auto-bridge a loopback
 /// OAuth callback port (if any) then open the URL in the host browser.
+#[allow(clippy::too_many_arguments)]
 fn browse_loop(
     engine: &dyn Engine,
     ctr: &str,
@@ -668,6 +784,7 @@ fn browse_loop(
     opener: &str,
     bridged: &mut HashSet<u16>,
     fwd_names: &mut Vec<String>,
+    guard: &mut crate::browser::BrowseGuard,
 ) -> Result<()> {
     loop {
         let line = engine.exec_capture(ctr, &["cat", crate::browser::FIFO_PATH])?;
@@ -695,9 +812,12 @@ fn browse_loop(
                 }
             }
         }
-        match Command::new(opener).arg(url).status() {
-            Ok(_) => println!("↗ opened {url}"),
-            Err(e) => eprintln!("· could not open {url} via {opener} ({e})"),
+        if !guard.should_open(url) {
+            continue;
+        }
+        match crate::browser::open_url(opener, url) {
+            Ok(()) => println!("↗ opened {url}"),
+            Err(e) => eprintln!("· could not open {url} ({e})"),
         }
     }
 }
@@ -705,6 +825,68 @@ fn browse_loop(
 /// Effective import source: a per-workspace flag overrides the global default.
 fn resolve_import(flag: Option<ImportSrc>, global: Option<&Path>) -> Option<ImportSrc> {
     flag.or_else(|| global.map(|p| ImportSrc::Explicit(p.to_path_buf())))
+}
+
+/// Top-level dotfile entries an explicit `--import-dotfiles` may stage into a
+/// workspace. An ALLOWLIST (not a denylist): anything not listed is refused, so
+/// pointing `--import-dotfiles` at `~` by habit can't drag in arbitrary
+/// credentials (`.npmrc`, `.aws/`, `.config/gh`, …). Extend it deliberately.
+const ALLOWED_DOTFILES: &[&str] = &[
+    ".zshrc",
+    ".bashrc",
+    ".zshenv",
+    ".gitconfig",
+    ".tmux.conf",
+    ".vimrc",
+    ".config/nvim",
+    ".config/starship.toml",
+    ".config/git",
+    ".config/herdr",
+];
+
+/// Stage only the allowlisted dotfile entries from `src` into a fresh tempdir,
+/// rejecting symlinks at every level, then return the staging dir. The caller
+/// seeds from the staged snapshot — never the live source — closing the
+/// scan-then-copy TOCTOU a denylist has.
+fn stage_allowed_dotfiles(src: &Path) -> Result<tempfile::TempDir> {
+    let staging = tempfile::tempdir().context("staging dotfiles")?;
+    for name in ALLOWED_DOTFILES {
+        let from = src.join(name);
+        if !from.exists() {
+            continue;
+        }
+        let to = staging.path().join(name);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        copy_tree_rejecting_symlinks(&from, &to)?;
+    }
+    Ok(staging)
+}
+
+/// Copy a file or recurse a directory, refusing symlinks at every level (a
+/// symlinked dotfile could escape the workspace volume or point at a host secret).
+fn copy_tree_rejecting_symlinks(from: &Path, to: &Path) -> Result<()> {
+    let meta =
+        std::fs::symlink_metadata(from).with_context(|| format!("reading {}", from.display()))?;
+    if meta.file_type().is_symlink() {
+        bail!("refusing to import symlink {}", from.display());
+    }
+    if meta.is_dir() {
+        std::fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
+        for entry in
+            std::fs::read_dir(from).with_context(|| format!("reading {}", from.display()))?
+        {
+            let entry = entry?;
+            let entry_name = entry.file_name();
+            copy_tree_rejecting_symlinks(&entry.path(), &to.join(entry_name))?;
+        }
+    } else {
+        std::fs::copy(from, to)
+            .with_context(|| format!("copying {} -> {}", from.display(), to.display()))?;
+    }
+    Ok(())
 }
 
 /// Copy a host config file into the container volume (owned by dev), verbatim,
@@ -794,6 +976,9 @@ mod tests {
                 ("NERD_FONTS".to_string(), "1".to_string()),
             ]
         );
+        assert_eq!(opts.harden.pids_limit, Some(4096));
+        assert!(opts.harden.cap_add.is_empty());
+        assert!(!opts.harden.read_only_rootfs);
     }
 
     #[test]

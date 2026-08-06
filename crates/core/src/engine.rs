@@ -7,8 +7,20 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::naming;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+
+/// Forwarder relay image pinned to a registry digest (supply-chain hardening):
+/// `alpine/socat`. Pinned so a re-pointed tag or registry compromise can't swap
+/// the bridge OAuth callback ports flow through.
+const FORWARDER_IMAGE: &str =
+    "alpine/socat@sha256:e7b17711daaa7d49107a7193112689e91fb1a27bddd9cb0b32641b55b8e9e3b0";
+
+/// The `--label` value marking a work-managed object (`dev.work-cli.managed=true`).
+fn managed_label() -> String {
+    format!("{}=true", naming::LABEL_KEY)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineKind {
@@ -36,6 +48,45 @@ pub enum ContainerState {
     Missing,
 }
 
+/// Container hardening applied to every workspace (and forwarder) `docker run`.
+///
+/// The security defaults that cost nothing real workflows need — cap-drop ALL,
+/// no-new-privileges, a pids limit — ship ON and are appended additively in
+/// `Engine::run`. `cap_add`/`memory`/`cpus` are operational knobs (empty/None by
+/// default); fixed memory/CPU ceilings are policy, not a security default, and
+/// would break large monorepo/cargo builds, so they stay opt-in. `read_only_rootfs`
+/// is OFF by default because the browser shim writes system paths.
+#[derive(Debug, Clone)]
+pub struct HardenOpts {
+    /// Capabilities added back on top of cap-drop ALL. Empty by default.
+    pub cap_add: Vec<String>,
+    /// `--memory` (also sets `--memory-swap`). `None` = engine default.
+    pub memory: Option<String>,
+    /// `--cpus`. `None` = engine default.
+    pub cpus: Option<String>,
+    /// `--pids-limit`. `Some(4096)` by default — bounds fork bombs while leaving
+    /// headroom for heavy parallel builds. (`pids.max` counts THREADS as well as
+    /// processes, so a tight cap breaks cargo/LLVM/linkers/node/rust-analyzer.)
+    pub pids_limit: Option<u32>,
+    /// `--read-only` rootfs. OFF by default (shim writes `/usr/local/bin` etc.).
+    pub read_only_rootfs: bool,
+    /// `--tmpfs path:opts` mounts for writable scratch under a read-only rootfs.
+    pub tmpfs_mounts: Vec<(String, String)>,
+}
+
+impl Default for HardenOpts {
+    fn default() -> Self {
+        Self {
+            cap_add: Vec::new(),
+            memory: None,
+            cpus: None,
+            pids_limit: Some(4096),
+            read_only_rootfs: false,
+            tmpfs_mounts: Vec::new(),
+        }
+    }
+}
+
 /// `docker run` options for a workspace container.
 pub struct RunOpts {
     pub name: String,
@@ -47,6 +98,9 @@ pub struct RunOpts {
     pub cmd: Vec<String>, // e.g. ["sleep", "infinity"]
     /// Extra environment (`-e KEY=VALUE`). Identity metadata only.
     pub env: Vec<(String, String)>,
+    /// Hardening flags `Engine::run` appends (cap-drop ALL, no-new-privileges,
+    /// pids limit, optional memory/cpus/read-only/tmpfs) + the managed label.
+    pub harden: HardenOpts,
 }
 
 /// The only thing that talks to a container runtime.
@@ -100,6 +154,19 @@ pub trait Engine: Send + Sync {
     /// Generic `docker inspect --format` for a container (docker Go-template).
     /// Used by `doctor` for restart-policy / user / image / port checks.
     fn inspect_format(&self, name: &str, format: &str) -> Result<String>;
+    /// Stable identity of the active daemon (`docker info --format {{.ID}}`),
+    /// so a workspace created on one daemon refuses to talk to another.
+    fn daemon_id(&self) -> Result<String>;
+    /// True iff object `name` of `kind` (`"volume"`/`"network"`/`"container"`)
+    /// carries label `key` — used to refuse reusing a same-named object we
+    /// didn't create.
+    fn object_has_label(&self, name: &str, kind: &str, key: &str) -> Result<bool>;
+    /// Resolved image ID (`docker image inspect --format {{.Id}} <image>`),
+    /// recorded at create/recreate so `doctor` can flag a drifted image.
+    fn image_id(&self, image: &str) -> Result<String>;
+    /// All container names on the daemon (`docker ps -a --format {{.Names}}`),
+    /// so `doctor` can surface forwarder containers / orphans.
+    fn list_containers(&self) -> Result<Vec<String>>;
 
     /// Pull an image if absent (custom workspace images).
     fn pull_image(&self, image: &str) -> Result<()>;
@@ -147,12 +214,16 @@ pub fn pick_kind(orb: bool, docker: bool, podman: bool, colima: bool) -> Option<
 }
 
 fn which(bin: &str) -> bool {
+    // A binary that spawns but exits non-zero (broken install, blocked by
+    // policy) is NOT "present": only a successful `--version` counts, so
+    // `detect()` never picks a half-installed runtime.
     Command::new(bin)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .is_ok()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Detect OrbStack presence (the app exposes `docker`; `orb` is its own CLI).
@@ -261,7 +332,8 @@ impl Engine for DockerCli {
         Ok(code.success())
     }
     fn create_volume(&self, name: &str) -> Result<()> {
-        self.run_success(&["volume", "create", name])
+        let label = managed_label();
+        self.run_success(&["volume", "create", "--label", &label, name])
     }
     fn remove_volume(&self, name: &str) -> Result<()> {
         self.run_success(&["volume", "rm", name])
@@ -277,7 +349,8 @@ impl Engine for DockerCli {
         Ok(code.success())
     }
     fn create_network(&self, name: &str) -> Result<()> {
-        self.run_success(&["network", "create", name])
+        let label = managed_label();
+        self.run_success(&["network", "create", "--label", &label, name])
     }
     fn remove_network(&self, name: &str) -> Result<()> {
         self.run_success(&["network", "rm", name])
@@ -291,8 +364,12 @@ impl Engine for DockerCli {
     }
 
     fn container_state(&self, name: &str) -> Result<ContainerState> {
-        // `docker inspect` exits non-zero when the container is absent; that is
-        // Missing, not an error. Only treat a *present* container's status.
+        // `docker inspect` exits non-zero when the container is absent — that is
+        // `Missing`. A *different* failure (daemon down, auth, malformed name)
+        // must NOT collapse into `Missing`, or `has_live_session`/`doctor`/
+        // `ensure_running` would treat a down daemon as "no container" and fail
+        // open. Inspect stderr to tell them apart (case-insensitive: Docker says
+        // "No such container", Podman "no such container").
         let out = self
             .cmd()
             .args([
@@ -305,7 +382,12 @@ impl Engine for DockerCli {
             ])
             .output()?;
         if !out.status.success() {
-            return Ok(ContainerState::Missing);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let lower = stderr.to_ascii_lowercase();
+            if lower.contains("no such container") || lower.contains("no such object") {
+                return Ok(ContainerState::Missing);
+            }
+            bail!("could not inspect container {name}: {}", stderr.trim());
         }
         let state = String::from_utf8_lossy(&out.stdout).trim().to_string();
         match state.as_str() {
@@ -332,6 +414,32 @@ impl Engine for DockerCli {
         ]);
         for (k, v) in &opts.env {
             c.arg("-e").arg(format!("{k}={v}"));
+        }
+        // Hardening (HardenOpts) + the managed label, appended after identity
+        // args so they always apply. cap-drop ALL + no-new-privileges + a pids
+        // limit cost nothing real shells/builds need; memory/cpus/read-only/tmpfs
+        // are opt-in. See `HardenOpts`.
+        c.arg("--label").arg(managed_label());
+        c.args(["--cap-drop", "ALL", "--security-opt", "no-new-privileges"]);
+        for cap in &opts.harden.cap_add {
+            c.args(["--cap-add", cap.as_str()]);
+        }
+        if let Some(mem) = &opts.harden.memory {
+            c.args(["--memory", mem.as_str(), "--memory-swap", mem.as_str()]);
+        }
+        if let Some(cpus) = &opts.harden.cpus {
+            c.args(["--cpus", cpus.as_str()]);
+        }
+        if let Some(pids) = opts.harden.pids_limit {
+            let pids = pids.to_string();
+            c.args(["--pids-limit", pids.as_str()]);
+        }
+        if opts.harden.read_only_rootfs {
+            c.arg("--read-only");
+        }
+        for (path, mo) in &opts.harden.tmpfs_mounts {
+            let spec = format!("{path}:{mo}");
+            c.args(["--tmpfs", spec.as_str()]);
         }
         c.arg(&opts.image);
         for arg in &opts.cmd {
@@ -525,6 +633,27 @@ impl Engine for DockerCli {
     fn inspect_format(&self, name: &str, format: &str) -> Result<String> {
         self.run_capture(&["inspect", "--type", "container", "--format", format, name])
     }
+    fn daemon_id(&self) -> Result<String> {
+        self.run_capture(&["info", "--format", "{{.ID}}"])
+    }
+    fn object_has_label(&self, name: &str, kind: &str, key: &str) -> Result<bool> {
+        // Containers expose labels at .Config.Labels; volumes/networks at .Labels.
+        let value = if kind == "container" {
+            let fmt = format!("{{{{index .Config.Labels \"{key}\"}}}}");
+            self.run_capture(&["inspect", "--type", "container", "--format", &fmt, name])?
+        } else {
+            let fmt = format!("{{{{index .Labels \"{key}\"}}}}");
+            self.run_capture(&[kind, "inspect", "--format", &fmt, name])?
+        };
+        Ok(value.trim() == "true")
+    }
+    fn image_id(&self, image: &str) -> Result<String> {
+        self.run_capture(&["image", "inspect", "--format", "{{.Id}}", image])
+    }
+    fn list_containers(&self) -> Result<Vec<String>> {
+        let out = self.run_capture(&["ps", "-a", "--format", "{{.Names}}"])?;
+        Ok(out.lines().map(str::to_string).collect())
+    }
     fn pull_image(&self, image: &str) -> Result<()> {
         // Stream pull output to the user's terminal.
         let status = self
@@ -548,10 +677,13 @@ impl Engine for DockerCli {
         let publish = format!("127.0.0.1:{host_port}:{host_port}");
         let listen = format!("TCP-LISTEN:{host_port},fork,reuseaddr");
         let connect = format!("TCP:{target}:{target_port}");
+        let label = managed_label();
         // Foreground + attached: this call BLOCKS until the user interrupts.
         // Ctrl-C is delivered to the whole process group; `docker run` catches
         // it, stops the container, and `--rm` removes it — cleanup is robust
-        // even if this process is killed before returning.
+        // even if this process is killed before returning. Hardened: cap-drop
+        // ALL + no-new-privileges + managed label + a digest-pinned image, so a
+        // relay bridging the workspace network is as locked down as the workspace.
         let status = self
             .cmd()
             .args([
@@ -561,11 +693,17 @@ impl Engine for DockerCli {
                 name,
                 "--network",
                 network,
+                "--label",
+                &label,
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
                 "--entrypoint",
                 "socat",
                 "-p",
                 &publish,
-                "alpine/socat",
+                FORWARDER_IMAGE,
                 &listen,
                 &connect,
             ])
@@ -590,6 +728,7 @@ impl Engine for DockerCli {
         let publish = format!("127.0.0.1:{host_port}:{host_port}");
         let listen = format!("TCP-LISTEN:{host_port},fork,reuseaddr");
         let connect = format!("TCP:{target}:{target_port}");
+        let label = managed_label();
         let _child = self
             .cmd()
             .args([
@@ -599,11 +738,17 @@ impl Engine for DockerCli {
                 name,
                 "--network",
                 network,
+                "--label",
+                &label,
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
                 "--entrypoint",
                 "socat",
                 "-p",
                 &publish,
-                "alpine/socat",
+                FORWARDER_IMAGE,
                 &listen,
                 &connect,
             ])

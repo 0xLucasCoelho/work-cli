@@ -140,6 +140,20 @@ enum Command {
     ///
     /// Examples: `work update acme`; `work update --all`; `work update acme --dry-run`.
     Update(commands::UpdateArgs),
+    /// Recreate workspace container(s) to apply the current hardening flags.
+    ///
+    /// Containers created before cap-drop ALL / no-new-privileges / a pids
+    /// limit shipped keep the old flags until recreated. `work harden <ws>` (or
+    /// `--all`) recreates them, ending any live session (gated by the safety
+    /// policy) and re-recording the image digest.
+    Harden {
+        /// Workspace to harden (omit with --all for every workspace).
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
+        ws: Option<String>,
+        /// Harden every workspace.
+        #[arg(long)]
+        all: bool,
+    },
     /// Bare `work <ws>`: attach to a workspace's persistent session.
     /// External-subcommand name is `args[0]`; trailing tokens are `args[1..]`.
     /// Modeled natively so dynamic completion can offer workspace names for it.
@@ -262,6 +276,7 @@ fn main() -> Result<ExitCode> {
             return commands::doctor();
         }
         Some(Command::Update(a)) => commands::update(&a)?,
+        Some(Command::Harden { ws, all }) => commands::harden(ws.as_deref(), all, cli.yes)?,
         Some(Command::Other(args)) => {
             // `work <ws>` -> attach. args[0] is the workspace name (validated by shell()).
             let name = args.first().cloned().unwrap_or_default();

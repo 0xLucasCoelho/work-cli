@@ -28,8 +28,11 @@
 ## for example: "+9", "-05", "+03:30", "-01:23:45", etc.
 # timezone = "local"
 
-## enable or disable automatic sync
-# auto_sync = true
+## Cloud sync is OFF in work workspaces: shell history stays local to this
+## container's volume. Atuin's own default is auto_sync=true (against
+## api.atuin.sh), so this MUST be set explicitly to keep history from leaving
+## the workspace. Enable only if you accept history leaving the workspace.
+auto_sync = false
 
 ## enable or disable automatic update checks
 # update_check = true

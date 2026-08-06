@@ -8,6 +8,8 @@ fn workspace_config_round_trips_toml() {
         git_name: Some("Jane Doe".into()),
         git_email: Some("jane@acme.io".into()),
         shell: None,
+        daemon_id: None,
+        image_digest: None,
         created_at: "2026-07-28T12:00:00Z".into(),
     };
     let s = toml::to_string(&cfg).unwrap();

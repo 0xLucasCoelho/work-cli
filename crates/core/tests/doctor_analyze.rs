@@ -75,6 +75,13 @@ fn hp(
         image: image.into(),
         configured_image: cfg_image.into(),
         ports_json: ports.into(),
+        // Hardening defaults that PASS — individual tests mutate the field
+        // under test.
+        cap_drop: "ALL".into(),
+        security_opt: r#"["no-new-privileges"]"#.into(),
+        running_image_id: None,
+        resolved_image_id: None,
+        managed_label: true,
     }
 }
 
@@ -164,6 +171,108 @@ fn hardening_flags_published_ports() {
         !analyze_hardening(&p)
             .iter()
             .find(|r| r.label == "acme:ports")
+            .unwrap()
+            .ok
+    );
+}
+
+#[test]
+fn hardening_flags_missing_cap_drop() {
+    let mut p = hp(
+        "acme",
+        "unless-stopped",
+        "dev",
+        "work-base:latest",
+        "work-base:latest",
+        "{}",
+    );
+    p.cap_drop = "[NET_RAW]".into();
+    assert!(
+        !analyze_hardening(&p)
+            .iter()
+            .find(|r| r.label == "acme:cap-drop")
+            .unwrap()
+            .ok
+    );
+}
+
+#[test]
+fn hardening_flags_missing_no_new_privileges() {
+    let mut p = hp(
+        "acme",
+        "unless-stopped",
+        "dev",
+        "work-base:latest",
+        "work-base:latest",
+        "{}",
+    );
+    p.security_opt = "[]".into();
+    assert!(
+        !analyze_hardening(&p)
+            .iter()
+            .find(|r| r.label == "acme:no-new-privileges")
+            .unwrap()
+            .ok
+    );
+}
+
+#[test]
+fn hardening_flags_unmanaged_container() {
+    let mut p = hp(
+        "acme",
+        "unless-stopped",
+        "dev",
+        "work-base:latest",
+        "work-base:latest",
+        "{}",
+    );
+    p.managed_label = false;
+    assert!(
+        !analyze_hardening(&p)
+            .iter()
+            .find(|r| r.label == "acme:managed")
+            .unwrap()
+            .ok
+    );
+}
+
+#[test]
+fn hardening_flags_image_digest_drift() {
+    let mut p = hp(
+        "acme",
+        "unless-stopped",
+        "dev",
+        "work-base:latest",
+        "work-base:latest",
+        "{}",
+    );
+    p.running_image_id = Some("sha256:aaaa".into());
+    p.resolved_image_id = Some("sha256:bbbb".into());
+    assert!(
+        !analyze_hardening(&p)
+            .iter()
+            .find(|r| r.label == "acme:image-drift")
+            .unwrap()
+            .ok
+    );
+}
+
+#[test]
+fn hardening_digest_ok_when_matching() {
+    let mut p = hp(
+        "acme",
+        "unless-stopped",
+        "dev",
+        "work-base:latest",
+        "work-base:latest",
+        "{}",
+    );
+    p.running_image_id = Some("sha256:same".into());
+    p.resolved_image_id = Some("sha256:same".into());
+    assert!(
+        analyze_hardening(&p)
+            .iter()
+            .find(|r| r.label == "acme:image-drift")
             .unwrap()
             .ok
     );

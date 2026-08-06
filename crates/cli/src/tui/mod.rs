@@ -157,7 +157,7 @@ fn run_loop(
             // While a confirm is pending, only y / n / Esc / q / Ctrl-C respond.
             if app.confirm().is_some() {
                 match key.code {
-                    KeyCode::Char('y') | KeyCode::Enter => {
+                    KeyCode::Char('y') => {
                         if let Some(c) = app.take_confirm() {
                             let r = match c.action {
                                 ConfirmAction::Stop => {
@@ -170,7 +170,7 @@ fn run_loop(
                             app.set_status(result_msg(r, &c.ws, verb_for(c.action)));
                         }
                     }
-                    KeyCode::Char('n') | KeyCode::Esc => app.cancel_confirm(),
+                    KeyCode::Char('n') | KeyCode::Esc | KeyCode::Enter => app.cancel_confirm(),
                     KeyCode::Char('q') => return Ok(()),
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         return Ok(())
@@ -305,8 +305,8 @@ fn gate(
     use work_core::safety::{self, Action};
     use work_core::workspace::Workspace;
     let live = Workspace::open(name)
-        .map(|w| w.has_live_session())
-        .unwrap_or(false);
+        .and_then(|w| w.has_live_session())
+        .unwrap_or(true);
     match safety::decide(severity, live, true, yes) {
         Action::Proceed => {
             let r = Workspace::open(name).and_then(|w| f(&w));

@@ -7,8 +7,14 @@
 /// added here (and `validate_name` will then reject it as a workspace name).
 pub const RESERVED: &[&str] = &[
     "new", "all", "browse", "ls", "start", "stop", "stop-all", "resume", "fwd", "config", "image",
-    "doctor", "help", "version", "rm", "tab", "tabs", "update",
+    "doctor", "help", "harden", "version", "rm", "tab", "tabs", "update",
 ];
+
+/// OCI label key marking an object (volume/network/container) as created and
+/// owned by `work`. Creation always sets it; reuse verifies it, so an object
+/// that merely *names* like a work resource but wasn't created by us is never
+/// silently adopted (and `work doctor` can tell work-managed objects apart).
+pub const LABEL_KEY: &str = "dev.work-cli.managed";
 
 pub fn volume(ws: &str) -> String {
     format!("work-{ws}-home")
@@ -39,6 +45,13 @@ pub fn validate_name(name: &str) -> Result<(), crate::error::NameError> {
     if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
         return Err(NameError::InvalidChar);
     }
+    if name.starts_with("fwd-") || name.starts_with("browse-") {
+        // Forwarder containers are named `work-fwd-<ws>-<port>` /
+        // `work-browse-<ws>-<port>`; a workspace whose name begins with these
+        // prefixes would collide with (and let `forward()` delete) a live
+        // forwarder or, worse, a real workspace's container.
+        return Err(NameError::ReservedPrefix);
+    }
     if RESERVED.contains(&name) {
         return Err(NameError::Reserved);
     }
@@ -60,5 +73,20 @@ mod tests {
                 "verb not rejected by validate_name: {verb}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_forwarder_prefixes() {
+        for name in ["fwd-acme-8080", "browse-acme-3000", "fwd-x"] {
+            assert!(
+                matches!(
+                    validate_name(name),
+                    Err(crate::error::NameError::ReservedPrefix)
+                ),
+                "forwarder-prefixed name not rejected: {name}"
+            );
+        }
+        // A name merely containing "fwd" as a segment is fine.
+        assert!(validate_name("acme-fwd").is_ok());
     }
 }

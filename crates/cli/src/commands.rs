@@ -70,7 +70,7 @@ pub fn start(name: &str) -> Result<()> {
 
 pub fn stop(name: &str, yes: bool) -> Result<()> {
     let ws = Workspace::open(name)?;
-    let live = ws.has_live_session();
+    let live = ws.has_live_session().unwrap_or(true);
     confirm(
         Severity::WorkLoss,
         live,
@@ -90,9 +90,11 @@ pub fn stop_all(yes: bool) -> Result<()> {
         return Ok(());
     }
     let any_live = names.iter().any(|n| {
+        // Assume live on any error (fail-closed): the work-loss prompt must
+        // fire when liveness can't be determined.
         Workspace::open(n)
-            .map(|ws| ws.has_live_session())
-            .unwrap_or(false)
+            .and_then(|ws| ws.has_live_session())
+            .unwrap_or(true)
     });
     confirm(
         Severity::WorkLoss,
@@ -115,7 +117,7 @@ pub fn stop_all(yes: bool) -> Result<()> {
 /// `work rm <ws> [--purge]`.
 pub fn rm(name: &str, purge: bool, yes: bool) -> Result<()> {
     let ws = Workspace::open(name)?;
-    let live = ws.has_live_session();
+    let live = ws.has_live_session().unwrap_or(true);
     let (sev, desc) = if purge {
         (
             Severity::DataLoss,
@@ -217,6 +219,40 @@ pub fn image_init(output: Option<&std::path::Path>) -> Result<()> {
     Ok(())
 }
 
+/// `work harden [<ws>|--all]`: recreate workspace container(s) so they pick up
+/// the current hardening defaults (cap-drop ALL, no-new-privileges, pids limit,
+/// the managed label) and re-record the image digest. A container created
+/// before those defaults shipped — or that drifted — otherwise keeps the old
+/// flags forever: a stopped container only `start`s, never recreates. Ends any
+/// live session, gated by the safety policy.
+pub fn harden(name: Option<&str>, all: bool, yes: bool) -> Result<()> {
+    let names: Vec<String> = if all {
+        config::list_workspace_names()?
+    } else {
+        let n = name.ok_or_else(|| {
+            anyhow::anyhow!("specify a workspace: `work harden <ws>`, or `work harden --all`")
+        })?;
+        vec![n.to_string()]
+    };
+    if names.is_empty() {
+        println!("no workspaces to harden");
+        return Ok(());
+    }
+    for n in &names {
+        let ws = Workspace::open(n)?;
+        confirm(
+            Severity::WorkLoss,
+            ws.has_live_session().unwrap_or(true),
+            yes,
+            n,
+            "recreating to apply hardening ends its running session",
+        )?;
+        ws.recreate()?;
+        println!("✓ hardened '{n}' (cap-drop ALL, no-new-privileges, pids limit, managed label)");
+    }
+    Ok(())
+}
+
 /// `work config <ws>`: print the (non-secret) workspace metadata.
 pub fn config_show(name: &str) -> Result<()> {
     let cfg = config::load_workspace(name)?;
@@ -256,7 +292,7 @@ pub fn config_edit(name: &str, yes: bool) -> Result<()> {
     if ws.cfg.image != before.image {
         confirm(
             Severity::WorkLoss,
-            ws.has_live_session(),
+            ws.has_live_session().unwrap_or(true),
             yes,
             name,
             "recreating the container will end its running session",

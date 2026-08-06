@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_IMAGE: &str = "work-base:latest";
@@ -76,6 +76,18 @@ pub struct WorkspaceConfig {
     pub git_email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
+    /// Daemon (engine) this workspace was created on, so a later `work <ws>`
+    /// against a different active engine/context is refused instead of silently
+    /// talking to a different daemon. `None` = created before this field existed
+    /// (backfilled on next open, never a hard failure).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_id: Option<String>,
+    /// Resolved image ID (`docker image inspect --format {{.Id}}`) recorded at
+    /// create/recreate. `doctor` compares the running container's image against
+    /// this, not the tag string — so a locally-rebuilt `work-base:latest` that
+    /// drifted from the recorded digest is flagged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_digest: Option<String>,
     pub created_at: String,
 }
 
@@ -124,11 +136,26 @@ pub fn workspace_exists(ws: &str) -> bool {
 }
 
 pub fn load_workspace(ws: &str) -> Result<WorkspaceConfig> {
+    // The requested name is authoritative: validate it, then refuse any file
+    // whose internal `name` disagrees. Without this, a crafted/merged TOML
+    // named "victim" inside `safe.toml` would make every downstream call
+    // (remove/recreate/run) operate on "victim" while the user asked for "safe".
+    crate::naming::validate_name(ws)
+        .map_err(|e| anyhow::anyhow!("invalid workspace name '{ws}': {e}"))?;
     let path = workspace_config_path(ws);
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("workspace '{ws}' not found at {}", path.display()))?;
     let cfg: WorkspaceConfig =
         toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    if cfg.name != ws {
+        bail!(
+            "config at {} claims name '{}', requested as '{}' — refusing to load a mismatched \
+             config. Fix the `name` field or the filename.",
+            path.display(),
+            cfg.name,
+            ws
+        );
+    }
     Ok(cfg)
 }
 

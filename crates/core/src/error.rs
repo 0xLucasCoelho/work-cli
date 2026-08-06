@@ -8,6 +8,7 @@ pub enum NameError {
     TooLong,
     InvalidChar,
     Reserved,
+    ReservedPrefix,
 }
 
 impl fmt::Display for NameError {
@@ -19,6 +20,10 @@ impl fmt::Display for NameError {
                 write!(f, "name must match [a-z0-9][a-z0-9-]* (lowercase)")
             }
             NameError::Reserved => write!(f, "name is reserved (matches a command)"),
+            NameError::ReservedPrefix => write!(
+                f,
+                "name uses a reserved prefix (fwd-/browse- are forwarder container names)"
+            ),
         }
     }
 }

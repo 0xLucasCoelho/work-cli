@@ -3,6 +3,11 @@
 //! are unit-tested; `install_shim`/`ensure_fifo` touch the container and are
 //! validated by the `work browse` smoke test.
 
+use std::collections::HashSet;
+use std::io::{self, Write};
+use std::process::Command;
+use std::time::{Duration, Instant};
+
 use anyhow::{bail, Context, Result};
 use url::{Host, Url};
 
@@ -82,6 +87,96 @@ pub fn callback_port(raw_url: &str) -> Option<u16> {
         return None;
     }
     r.port()
+}
+
+/// Minimum interval between two host-browser opens. Bounds a container that
+/// spams the FIFO from forcing a flurry of browser launches.
+const BROWSE_RATE_LIMIT: Duration = Duration::from_secs(2);
+
+/// Gate for `work browse`: each http(s) URL a container writes to the FIFO is
+/// opened in the host browser only after the user confirms the HOST (once per
+/// `work browse` session) and never more than once per `BROWSE_RATE_LIMIT`. The
+/// container can *request* a navigation; it cannot drive an authenticated host
+/// browser session (Jira/GitHub/GCP) silently.
+pub struct BrowseGuard {
+    confirmed: HashSet<String>,
+    last_open: Option<Instant>,
+    yes_all: bool,
+}
+
+impl BrowseGuard {
+    /// `yes_all` skips the per-host prompt (set via `WORK_BROWSE_CONFIRM=no`).
+    pub fn new(yes_all: bool) -> Self {
+        Self {
+            confirmed: HashSet::new(),
+            last_open: None,
+            yes_all,
+        }
+    }
+
+    /// True iff `url` may be opened now (passes the rate limit + host confirm).
+    pub fn should_open(&mut self, url: &str) -> bool {
+        if self
+            .last_open
+            .is_some_and(|t| t.elapsed() < BROWSE_RATE_LIMIT)
+        {
+            eprintln!("· rate-limited (last open <2s ago): {url}");
+            return false;
+        }
+        let host = Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_default();
+        if !self.yes_all && !self.confirmed.contains(&host) {
+            if host.is_empty() {
+                eprintln!("· no host in {url} — not opening");
+                return false;
+            }
+            eprint!("· open {host} in your host browser? [y/N] ");
+            let _ = io::stderr().flush();
+            let mut line = String::new();
+            if io::stdin().read_line(&mut line).is_err() {
+                return false;
+            }
+            if line.trim().eq_ignore_ascii_case("y") {
+                self.confirmed.insert(host);
+            } else {
+                eprintln!("· skipped {url}");
+                return false;
+            }
+        }
+        self.last_open = Some(Instant::now());
+        true
+    }
+}
+
+/// Open `url` in the host browser. Unless `WORK_BROWSE_PROFILE=default` (the
+/// opt-out), try a throwaway Chrome guest profile on macOS so a forced
+/// navigation can't ride an authenticated profile; fall back to the default
+/// opener if Chrome isn't present. Returns an error string on failure.
+pub fn open_url(opener: &str, url: &str) -> Result<(), String> {
+    if std::env::consts::OS == "macos"
+        && std::env::var("WORK_BROWSE_PROFILE").ok().as_deref() != Some("default")
+    {
+        let status = Command::new("open")
+            .args([
+                "-na",
+                "Google Chrome",
+                "--args",
+                "--profile-directory=Guest Profile",
+            ])
+            .arg(url)
+            .status();
+        if matches!(status, Ok(s) if s.success()) {
+            return Ok(());
+        }
+        // Chrome absent / failed -> fall through to the default opener.
+    }
+    match Command::new(opener).arg(url).status() {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("opener exited {s}")),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Idempotently install the shim + symlinks + profile.d export as root. Runs
