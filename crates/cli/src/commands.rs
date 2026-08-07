@@ -220,8 +220,8 @@ pub fn image_init(output: Option<&std::path::Path>) -> Result<()> {
 }
 
 /// `work harden [<ws>|--all]`: recreate workspace container(s) so they pick up
-/// the current hardening defaults (cap-drop ALL, no-new-privileges, pids limit,
-/// the managed label) and re-record the image digest. A container created
+/// the current hardening defaults (pids limit, the managed label) and re-record
+/// the image digest. A container created
 /// before those defaults shipped — or that drifted — otherwise keeps the old
 /// flags forever: a stopped container only `start`s, never recreates. Ends any
 /// live session, gated by the safety policy.
@@ -248,7 +248,7 @@ pub fn harden(name: Option<&str>, all: bool, yes: bool) -> Result<()> {
             "recreating to apply hardening ends its running session",
         )?;
         ws.recreate()?;
-        println!("✓ hardened '{n}' (cap-drop ALL, no-new-privileges, pids limit, managed label)");
+        println!("✓ hardened '{n}' (pids limit, managed label)");
     }
     Ok(())
 }

@@ -33,10 +33,6 @@ pub struct HardeningProbe {
     pub image: String,
     pub configured_image: String,
     pub ports_json: String,
-    /// `{{.HostConfig.CapDrop}}` — expect to contain "ALL".
-    pub cap_drop: String,
-    /// `{{json .HostConfig.SecurityOpt}}` — expect "no-new-privileges".
-    pub security_opt: String,
     /// `{{.Image}}` (the sha the container actually runs). `None` if unreadable.
     pub running_image_id: Option<String>,
     /// The configured tag's image id RE-RESOLVED at check time
@@ -197,28 +193,6 @@ pub fn analyze_hardening(p: &HardeningProbe) -> Vec<CheckResult> {
         },
     });
 
-    let caps_ok = p.cap_drop.contains("ALL");
-    out.push(CheckResult {
-        label: format!("{}:cap-drop", p.ws),
-        ok: caps_ok,
-        detail: if caps_ok {
-            "cap-drop=ALL".into()
-        } else {
-            format!("expected cap-drop ALL, found '{}'", p.cap_drop)
-        },
-    });
-
-    let nnp_ok = p.security_opt.contains("no-new-privileges");
-    out.push(CheckResult {
-        label: format!("{}:no-new-privileges", p.ws),
-        ok: nnp_ok,
-        detail: if nnp_ok {
-            "no-new-privileges set".into()
-        } else {
-            format!("expected no-new-privileges, found '{}'", p.security_opt)
-        },
-    });
-
     let label_ok = p.managed_label;
     out.push(CheckResult {
         label: format!("{}:managed", p.ws),
@@ -337,12 +311,6 @@ pub fn run(engine: &dyn Engine) -> Result<Vec<CheckResult>> {
                         continue;
                     }
                 };
-                let cap_drop = engine
-                    .inspect_format(&ctr, "{{.HostConfig.CapDrop}}")
-                    .unwrap_or_default();
-                let security_opt = engine
-                    .inspect_format(&ctr, "{{json .HostConfig.SecurityOpt}}")
-                    .unwrap_or_default();
                 let running_image_id = engine
                     .inspect_format(&ctr, "{{.Image}}")
                     .ok()
@@ -361,8 +329,6 @@ pub fn run(engine: &dyn Engine) -> Result<Vec<CheckResult>> {
                     image,
                     configured_image: cfg.image,
                     ports_json: ports,
-                    cap_drop,
-                    security_opt,
                     running_image_id,
                     resolved_image_id,
                     managed_label,

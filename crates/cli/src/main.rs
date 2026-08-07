@@ -142,8 +142,8 @@ enum Command {
     Update(commands::UpdateArgs),
     /// Recreate workspace container(s) to apply the current hardening flags.
     ///
-    /// Containers created before cap-drop ALL / no-new-privileges / a pids
-    /// limit shipped keep the old flags until recreated. `work harden <ws>` (or
+    /// Containers created before a pids limit / managed label shipped keep the
+    /// old flags until recreated. `work harden <ws>` (or
     /// `--all`) recreates them, ending any live session (gated by the safety
     /// policy) and re-recording the image digest.
     Harden {

@@ -4,6 +4,7 @@
 //! expose it; Podman is CLI-compatible (`podman` binary, identical verbs).
 
 use std::collections::BTreeSet;
+use std::fs::File;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -50,15 +51,16 @@ pub enum ContainerState {
 
 /// Container hardening applied to every workspace (and forwarder) `docker run`.
 ///
-/// The security defaults that cost nothing real workflows need — cap-drop ALL,
-/// no-new-privileges, a pids limit — ship ON and are appended additively in
-/// `Engine::run`. `cap_add`/`memory`/`cpus` are operational knobs (empty/None by
+/// Workspace hardening: a pids limit + the managed label always ship, appended
+/// additively in `Engine::run`. cap-drop ALL / no-new-privileges are deliberately
+/// NOT set — they block `sudo`/setuid, which workspaces need to install tools at
+/// runtime. `cap_add`/`memory`/`cpus` are operational knobs (empty/None by
 /// default); fixed memory/CPU ceilings are policy, not a security default, and
 /// would break large monorepo/cargo builds, so they stay opt-in. `read_only_rootfs`
 /// is OFF by default because the browser shim writes system paths.
 #[derive(Debug, Clone)]
 pub struct HardenOpts {
-    /// Capabilities added back on top of cap-drop ALL. Empty by default.
+    /// Capabilities to add beyond the engine default. Empty by default.
     pub cap_add: Vec<String>,
     /// `--memory` (also sets `--memory-swap`). `None` = engine default.
     pub memory: Option<String>,
@@ -98,8 +100,8 @@ pub struct RunOpts {
     pub cmd: Vec<String>, // e.g. ["sleep", "infinity"]
     /// Extra environment (`-e KEY=VALUE`). Identity metadata only.
     pub env: Vec<(String, String)>,
-    /// Hardening flags `Engine::run` appends (cap-drop ALL, no-new-privileges,
-    /// pids limit, optional memory/cpus/read-only/tmpfs) + the managed label.
+    /// Hardening flags `Engine::run` appends (pids limit, the managed label,
+    /// optional cap_add/memory/cpus/read-only/tmpfs).
     pub harden: HardenOpts,
 }
 
@@ -124,25 +126,30 @@ pub trait Engine: Send + Sync {
     fn stop_container(&self, name: &str) -> Result<()>;
     fn remove_container(&self, name: &str) -> Result<()>;
 
-    /// Interactive exec — inherits the calling process's stdio/tty.
-    fn exec_interactive(&self, name: &str, cmd: &[&str]) -> Result<()>;
+    /// Interactive exec — inherits the calling process's stdio/tty. `shell` is
+    /// the resolved shell basename; injected as `$SHELL` so herdr spawns the
+    /// correct pane shell — and so containers created before this env was set
+    /// at `docker run` time still heal on attach.
+    fn exec_interactive(&self, name: &str, cmd: &[&str], shell: &str) -> Result<()>;
     /// Non-interactive exec — captures stdout.
     fn exec_capture(&self, name: &str, cmd: &[&str]) -> Result<String>;
     /// `docker exec --user root <name> <cmd...>` (non-interactive), require
-    /// success. For one-off system setup the `dev` user can't perform (e.g.
-    /// installing a shim under `/usr/local/bin`). Mirrors the `--user root`
-    /// pattern in seed_file/seed_dir, but as a general exec.
+    /// success. For one-off system setup touching root-owned paths the `dev`
+    /// user can't write (e.g. installing the shim under `/usr/local/bin`).
+    /// Workspace containers are not cap-dropped, so this runs as full root.
     fn exec_root(&self, name: &str, cmd: &[&str]) -> Result<()>;
     /// True iff container `name` has a live in-container multiplexer runtime
     /// (the headless herdr server). Returns `false` (NOT an error) when the
     /// container is missing/stopped or the server is absent — so `ls`/`stop`/
     /// `rm` never choke on a downed box.
     fn runtime_up(&self, name: &str) -> Result<bool>;
-    /// Copy host file `src` into container `name` at `dest`, owned by `dev`.
-    /// `docker cp` + `chown dev:dev` (as root). Creates no host bind-mount.
+    /// Install host file `src` into container `name` at `dest`, owned by `dev`.
+    /// Streams the bytes through `tee` as the `dev` user, so the file is born
+    /// dev-owned — no separate `chown` step. See `seed_dir`.
     fn seed_file(&self, name: &str, src: &Path, dest: &str) -> Result<()>;
-    /// Recursively copy a host directory's *contents* into `dest_dir` in the
-    /// container, then chown -R to dev. Mirrors seed_file for a whole tree.
+    /// Recursively copy a host directory's *contents* into `dest_dir`, owned by
+    /// `dev`. Streams a tarball extracted as `dev` — files are born dev-owned,
+    /// so no `chown` is ever needed. Mirrors `seed_file` for a tree.
     fn seed_dir(&self, name: &str, src_dir: &Path, dest_dir: &str) -> Result<()>;
 
     fn image_exists(&self, image: &str) -> Result<bool>;
@@ -286,19 +293,23 @@ impl DockerCli {
     }
 
     fn run_success(&self, args: &[&str]) -> Result<()> {
-        let status = self
+        // Capture stderr (not just the status) so a failing docker verb reports
+        // its cause — e.g. a "no such container" would otherwise surface as a
+        // bare "failed (exit 1)" with nothing to act on.
+        let out = self
             .cmd()
             .args(args)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+            .stderr(Stdio::piped())
+            .output()
             .with_context(|| format!("spawning '{} {}'", self.binary, args.join(" ")))?;
-        if !status.success() {
+        if !out.status.success() {
             bail!(
-                "'{} {}' failed (exit {:?})",
+                "'{} {}' failed (exit {:?}): {}",
                 self.binary,
                 args.join(" "),
-                status.code()
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim(),
             );
         }
         Ok(())
@@ -415,12 +426,12 @@ impl Engine for DockerCli {
         for (k, v) in &opts.env {
             c.arg("-e").arg(format!("{k}={v}"));
         }
-        // Hardening (HardenOpts) + the managed label, appended after identity
-        // args so they always apply. cap-drop ALL + no-new-privileges + a pids
-        // limit cost nothing real shells/builds need; memory/cpus/read-only/tmpfs
-        // are opt-in. See `HardenOpts`.
+        // Managed label + pids limit always apply (appended after identity args).
+        // cap-drop ALL / no-new-privileges are deliberately NOT set here: they
+        // block `sudo`/setuid, which workspaces need to install tools at runtime.
+        // Forwarders (run_forwarder/spawn_forwarder) stay locked down — they never
+        // run a user shell. See `HardenOpts` for the opt-in knobs.
         c.arg("--label").arg(managed_label());
-        c.args(["--cap-drop", "ALL", "--security-opt", "no-new-privileges"]);
         for cap in &opts.harden.cap_add {
             c.args(["--cap-add", cap.as_str()]);
         }
@@ -470,7 +481,7 @@ impl Engine for DockerCli {
         self.run_success(&["rm", "-f", name])
     }
 
-    fn exec_interactive(&self, name: &str, cmd: &[&str]) -> Result<()> {
+    fn exec_interactive(&self, name: &str, cmd: &[&str], shell: &str) -> Result<()> {
         let mut c = self.cmd();
         c.arg("exec");
         // Forward terminal capabilities into the exec so TUI apps inside the
@@ -487,6 +498,12 @@ impl Engine for DockerCli {
         for (var, val) in TERMINAL_ENV_HARDCODED {
             c.arg("-e").arg(format!("{var}={val}"));
         }
+        // `$SHELL` selects herdr's pane shell (its config: "empty means $SHELL,
+        // then /bin/sh"). Inject it on the exec so workspaces created before
+        // this env was set at `docker run` time still spawn the right shell —
+        // mirrors the NERD_FONTS injection above.
+        c.arg("-e")
+            .arg(format!("SHELL={}", crate::config::shell_path(shell)));
         let status = c
             .args(["-it", "-w", "/home/dev", name])
             .args(cmd)
@@ -540,36 +557,98 @@ impl Engine for DockerCli {
         Ok(String::from_utf8_lossy(&out.stdout).contains("status: running"))
     }
     fn seed_file(&self, name: &str, src: &Path, dest: &str) -> Result<()> {
-        let src_s = src.to_string_lossy();
-        let target = format!("{name}:{dest}");
-        // Ensure dest's parent dir exists (e.g. /home/dev/.config for starship.toml);
-        // `docker cp` won't create intermediate dirs. Idempotent — /home/dev exists
-        // for rc seeds, so this is a no-op there.
-        if let Some(parent) = std::path::Path::new(dest).parent() {
+        // Install `src` at `dest` AS THE DEV USER by streaming its bytes through
+        // `tee`, so the file is born dev-owned — no separate `chown` step needed
+        // (`docker cp` would preserve the host uid and force a follow-up chown).
+        // `tee` writes 0666 & ~umask
+        // (0644 under the image's 022) — correct for the config files this seeds;
+        // it carries no exec bit, but none of these seeds needs one.
+        if let Some(parent) = Path::new(dest).parent() {
             if !parent.as_os_str().is_empty() {
                 let parent_s = parent.to_string_lossy();
-                let _ =
-                    self.run_success(&["exec", "--user", "root", name, "mkdir", "-p", &parent_s]);
+                self.run_success(&["exec", "--user", "dev", name, "mkdir", "-p", &parent_s])?;
             }
         }
-        self.run_success(&["cp", &src_s, &target])
-            .with_context(|| format!("copying {} into {target}", src.display()))?;
-        // `docker cp` preserves source uid/gid numerically; chown to dev as root.
-        self.run_success(&["exec", "--user", "root", name, "chown", "dev:dev", dest])
-            .with_context(|| format!("chown {dest} to dev"))?;
+        let file = File::open(src).with_context(|| format!("opening {}", src.display()))?;
+        let out = self
+            .cmd()
+            .args(["exec", "--user", "dev", "-i", name, "tee", dest])
+            .stdin(Stdio::from(file))
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .with_context(|| format!("installing {dest} into {name}"))?;
+        if !out.status.success() {
+            bail!(
+                "installing {dest} into {name} failed (exit {:?}): {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim(),
+            );
+        }
         Ok(())
     }
     fn seed_dir(&self, name: &str, src_dir: &Path, dest_dir: &str) -> Result<()> {
-        // `docker cp <src>/. <dest>` copies the directory's CONTENTS (preserving
-        // the tree, e.g. .config/nvim) into dest_dir; then chown -R to dev.
-        let src_s = format!("{}/.", src_dir.display());
-        let target = format!("{name}:{dest_dir}");
-        self.run_success(&["cp", &src_s, &target])
-            .with_context(|| format!("copying {} into {target}", src_dir.display()))?;
-        self.run_success(&[
-            "exec", "--user", "root", name, "chown", "-R", "dev:dev", dest_dir,
-        ])
-        .with_context(|| format!("chown -R {dest_dir} to dev"))?;
+        // Stream a tarball of `src_dir`'s contents into the container and extract
+        // AS THE DEV USER, so every file is born dev-owned with its mode preserved
+        // — no separate `chown` step. (`docker cp` would preserve the host uid for
+        // the whole tree, forcing a follow-up chown.) `--no-same-owner` skips GNU
+        // tar's (impossible as non-root)
+        // ownership step cleanly; COPYFILE_DISABLE keeps macOS bsdtar from
+        // embedding `._` AppleDouble members into the stream.
+        let mut tar = Command::new("tar");
+        tar.env("COPYFILE_DISABLE", "1")
+            .arg("-C")
+            .arg(src_dir)
+            .args(["-cf", "-", "."])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut tar_child = tar
+            .spawn()
+            .with_context(|| format!("spawning tar for {}", src_dir.display()))?;
+        let tar_stdout = tar_child.stdout.take().unwrap();
+        let out = self
+            .cmd()
+            .args([
+                "exec",
+                "--user",
+                "dev",
+                "-i",
+                name,
+                "tar",
+                "-C",
+                dest_dir,
+                "--no-same-owner",
+                "-xf",
+                "-",
+            ])
+            .stdin(Stdio::from(tar_stdout))
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .with_context(|| format!("extracting dotfiles into {name}:{dest_dir}"))?;
+        let tar_status = tar_child.wait().ok();
+        if !out.status.success() {
+            bail!(
+                "seeding {} into {}:{} failed (exit {:?}): {}",
+                src_dir.display(),
+                name,
+                dest_dir,
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim(),
+            );
+        }
+        // tar can only fail downstream (SIGPIPE, exit 141) if docker closed its
+        // stdin early — the real cause is reported above — so flag only a
+        // self-contained tar failure.
+        if let Some(ts) = tar_status {
+            if !ts.success() && ts.code() != Some(141) {
+                bail!(
+                    "archiving {} failed (exit {:?})",
+                    src_dir.display(),
+                    ts.code()
+                );
+            }
+        }
         Ok(())
     }
 

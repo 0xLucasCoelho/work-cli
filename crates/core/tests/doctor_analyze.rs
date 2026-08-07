@@ -77,8 +77,6 @@ fn hp(
         ports_json: ports.into(),
         // Hardening defaults that PASS — individual tests mutate the field
         // under test.
-        cap_drop: "ALL".into(),
-        security_opt: r#"["no-new-privileges"]"#.into(),
         running_image_id: None,
         resolved_image_id: None,
         managed_label: true,
@@ -171,46 +169,6 @@ fn hardening_flags_published_ports() {
         !analyze_hardening(&p)
             .iter()
             .find(|r| r.label == "acme:ports")
-            .unwrap()
-            .ok
-    );
-}
-
-#[test]
-fn hardening_flags_missing_cap_drop() {
-    let mut p = hp(
-        "acme",
-        "unless-stopped",
-        "dev",
-        "work-base:latest",
-        "work-base:latest",
-        "{}",
-    );
-    p.cap_drop = "[NET_RAW]".into();
-    assert!(
-        !analyze_hardening(&p)
-            .iter()
-            .find(|r| r.label == "acme:cap-drop")
-            .unwrap()
-            .ok
-    );
-}
-
-#[test]
-fn hardening_flags_missing_no_new_privileges() {
-    let mut p = hp(
-        "acme",
-        "unless-stopped",
-        "dev",
-        "work-base:latest",
-        "work-base:latest",
-        "{}",
-    );
-    p.security_opt = "[]".into();
-    assert!(
-        !analyze_hardening(&p)
-            .iter()
-            .find(|r| r.label == "acme:no-new-privileges")
             .unwrap()
             .ok
     );
