@@ -52,7 +52,7 @@ cargo binstall --git https://github.com/0xlucascoelho/work-cli work
 ```bash
 cargo install --git https://github.com/0xlucascoelho/work-cli
 # or, from a clone:
-cargo install --path .
+cargo install --path crates/cli
 ```
 
 Verify:

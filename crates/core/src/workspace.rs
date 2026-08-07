@@ -196,7 +196,7 @@ impl Workspace {
         if engine.container_exists(&ctr)? {
             engine.remove_container(&ctr)?;
         }
-        let opts = run_opts(name, &image);
+        let opts = run_opts(name, &image, &shell);
         engine.run(&opts)?;
         // Persist the config as soon as the container exists — recording the
         // daemon identity + resolved image id — so a later seeding failure leaves
@@ -263,7 +263,11 @@ impl Workspace {
         match self.engine.container_state(&ctr)? {
             ContainerState::Missing => {
                 // Recreate from config (e.g. container removed manually).
-                let opts = run_opts(&self.cfg.name, &self.cfg.image);
+                let opts = run_opts(
+                    &self.cfg.name,
+                    &self.cfg.image,
+                    self.cfg.shell.as_deref().unwrap_or("zsh"),
+                );
                 self.engine.run(&opts)?;
             }
             ContainerState::Stopped => {
@@ -335,7 +339,8 @@ impl Workspace {
 
         // Bare `herdr` launches the headless server on first run and attaches a
         // TUI client to it thereafter (the `tmux new-session -A` equivalent).
-        self.engine.exec_interactive(&ctr, &["herdr"])
+        self.engine
+            .exec_interactive(&ctr, &["herdr"], self.cfg.shell.as_deref().unwrap_or("zsh"))
     }
 
     /// Gather hostname/OS/git-branch via one `docker exec` and print the banner.
@@ -405,7 +410,11 @@ impl Workspace {
             self.engine.remove_container(&ctr)?;
         }
         ensure_image(&*self.engine, &self.cfg.image)?;
-        let opts = run_opts(&self.cfg.name, &self.cfg.image);
+        let opts = run_opts(
+            &self.cfg.name,
+            &self.cfg.image,
+            self.cfg.shell.as_deref().unwrap_or("zsh"),
+        );
         self.engine.run(&opts)?;
         // Re-record the resolved image id (a rebuild can change it) so `doctor`
         // detects future drift. Best-effort: a daemon that won't report it isn't
@@ -653,7 +662,7 @@ fn file_status(engine: &dyn Engine, ctr: &str, host: &Path, dest: &str) -> Resul
 /// the host terminal, so their Nerd-Font auto-detection fails and they fall back
 /// to ASCII glyphs. `NERD_FONTS=1` forces Nerd Font glyphs — the host terminal
 /// still renders them. Override per-workspace by unsetting it in your shell rc.
-fn run_opts(name: &str, image: &str) -> RunOpts {
+fn run_opts(name: &str, image: &str, shell: &str) -> RunOpts {
     RunOpts {
         name: naming::container(name),
         image: image.to_string(),
@@ -667,6 +676,12 @@ fn run_opts(name: &str, image: &str) -> RunOpts {
             ("WORKSPACE".into(), name.into()),
             ("BROWSER".into(), crate::browser::SHIM_DEST.into()),
             ("NERD_FONTS".into(), "1".into()),
+            // herdr picks its pane shell from `$SHELL` (its config: "empty means
+            // $SHELL, then /bin/sh"). A container started with `sleep infinity`
+            // skips login, so `$SHELL` is unset and herdr spawns sh — sourcing
+            // neither .zshrc nor .bashrc. Set it to the resolved shell's
+            // in-container path so the seeded rc actually runs.
+            ("SHELL".into(), config::shell_path(shell).into()),
         ],
         harden: HardenOpts::default(),
     }
@@ -963,7 +978,7 @@ mod tests {
 
     #[test]
     fn run_opts_sets_identity_env_and_names() {
-        let opts = run_opts("acme", "work-base:latest");
+        let opts = run_opts("acme", "work-base:latest", "zsh");
         assert_eq!(opts.name, "work-acme");
         assert_eq!(opts.network, "work-net-acme");
         assert_eq!(opts.volume, "work-acme-home");
@@ -974,6 +989,7 @@ mod tests {
                 ("WORKSPACE".to_string(), "acme".to_string()),
                 ("BROWSER".to_string(), "/usr/local/bin/xdg-open".to_string()),
                 ("NERD_FONTS".to_string(), "1".to_string()),
+                ("SHELL".to_string(), "/usr/bin/zsh".to_string()),
             ]
         );
         assert_eq!(opts.harden.pids_limit, Some(4096));

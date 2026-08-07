@@ -216,6 +216,18 @@ pub fn rc_name(shell: &str) -> &'static str {
     }
 }
 
+/// In-container absolute path for a resolved shell basename. The base image
+/// ships `zsh` and `bash` at `/usr/bin/...`; `dev`'s login shell is
+/// `/usr/bin/zsh`. `run_opts` sets this as `$SHELL` so tools that read it
+/// (herdr's pane shell) spawn the right shell — a container started with
+/// `sleep infinity` skips login, leaving `$SHELL` unset otherwise.
+pub fn shell_path(shell: &str) -> &'static str {
+    match shell {
+        "bash" => "/usr/bin/bash",
+        _ => "/usr/bin/zsh",
+    }
+}
+
 /// Where a seeded config file comes from (per-workspace flag, possibly from the
 /// global default). `Auto` resolves to the detected default path at seed time.
 #[derive(Debug, Clone)]
