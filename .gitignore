@@ -1,5 +1,0 @@
-/target
-# Cargo.lock IS committed: this workspace ships a binary.
-
-# Local git worktrees (e.g. .worktrees/feat-foo).
-/.worktrees/
