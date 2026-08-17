@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/core", "crates/cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+authors = ["Lucas Coelho"]
+repository = "https://github.com/0xlucascoelho/work-cli"
+description = "Isolated multi-company environments with one app to switch them"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+dirs = "5"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+work-core = { path = "crates/core" }
