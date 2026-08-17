@@ -80,7 +80,6 @@ pub trait Engine: Send + Sync {
     fn exec_interactive(&self, name: &str, cmd: &[&str], shell: &str) -> Result<()>;
     fn exec_capture(&self, name: &str, cmd: &[&str]) -> Result<String>;
 
-    fn runtime_up(&self, name: &str) -> Result<bool>;
     fn image_exists(&self, image: &str) -> Result<bool>;
     fn pull_image(&self, image: &str) -> Result<()>;
     fn build_image(&self, tag: &str, context: &std::path::Path, dockerfile: &str) -> Result<()>;
@@ -361,17 +360,6 @@ impl Engine for DockerCli {
             );
         }
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
-    }
-
-    fn runtime_up(&self, name: &str) -> Result<bool> {
-        if self.container_state(name)? != ContainerState::Running {
-            return Ok(false);
-        }
-        let out = self
-            .cmd()
-            .args(["exec", name, "herdr", "status", "server"])
-            .output()?;
-        Ok(out.status.success())
     }
 
     fn image_exists(&self, image: &str) -> Result<bool> {

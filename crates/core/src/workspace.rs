@@ -190,7 +190,8 @@ impl Workspace {
         Ok(())
     }
 
-    /// Attach to the in-box herdr if it is up, otherwise a login shell.
+    /// Attach a login shell in the company box. The ADE owns agent terminals;
+    /// this CLI path is a fallback, not a multiplexer.
     pub fn attach(&self) -> Result<()> {
         self.ensure_running()?;
         self.verify_before_attach()?;
@@ -199,29 +200,22 @@ impl Workspace {
         if config::load_global()?.show_banner {
             eprint!("{}", banner(&self.name, &self.cfg.image));
         }
-        if self.engine.runtime_up(&ctr).unwrap_or(false) {
-            self.engine
-                .exec_interactive(&ctr, &["herdr"], &shell)
-        } else {
-            self.engine
-                .exec_interactive(&ctr, &[config::shell_path(&shell), "-l"], &shell)
-        }
+        self.engine
+            .exec_interactive(&ctr, &[config::shell_path(&shell), "-l"], &shell)
     }
 
     pub fn has_live_session(&self) -> Result<bool> {
         let ctr = naming::container(&self.name);
-        Ok(self.engine.container_state(&ctr)? == ContainerState::Running
-            && self.engine.runtime_up(&ctr).unwrap_or(false))
+        Ok(self.engine.container_state(&ctr)? == ContainerState::Running)
     }
 
     pub fn status(&self) -> Result<WorkspaceStatus> {
         let ctr = naming::container(&self.name);
         let state = self.engine.container_state(&ctr)?;
-        let session_live = state == ContainerState::Running && self.engine.runtime_up(&ctr).unwrap_or(false);
         Ok(WorkspaceStatus {
             name: self.name.clone(),
             state,
-            session_live,
+            session_live: state == ContainerState::Running,
         })
     }
 
@@ -251,12 +245,10 @@ pub fn list_all() -> Result<Vec<WorkspaceStatus>> {
         let state = engine
             .container_state(&ctr)
             .unwrap_or(ContainerState::Missing);
-        let session_live =
-            state == ContainerState::Running && engine.runtime_up(&ctr).unwrap_or(false);
         out.push(WorkspaceStatus {
             name,
             state,
-            session_live,
+            session_live: state == ContainerState::Running,
         });
     }
     Ok(out)
@@ -284,19 +276,6 @@ fn banner(name: &str, image: &str) -> String {
     format!(
         "\n  ╭─ work ────────────────────────────────────╮\n  │  company        {name:<24} │\n  │  image          {image:<24} │\n  │  isolated · single-context                 │\n  ╰────────────────────────────────────────────╯\n\n"
     )
-}
-
-/// List herdr panes/agents inside a running box. Best-effort; empty if herdr is down.
-pub fn list_panes(name: &str) -> Result<String> {
-    let ws = Workspace::open(name)?;
-    let ctr = naming::container(name);
-    if ws.engine().container_state(&ctr)? != ContainerState::Running {
-        return Ok(String::new());
-    }
-    match ws.engine().exec_capture(&ctr, &["herdr", "agent", "list"]) {
-        Ok(s) => Ok(s),
-        Err(_) => Ok(String::new()),
-    }
 }
 
 pub fn build_default_image() -> Result<()> {

@@ -44,5 +44,6 @@ nets, bind mounts, published ports, root user, or missing hardening.
 
 - Inner Claude/Codex sandboxes (bubblewrap / Seatbelt) — defense in depth
   *inside* a company, not the company wall.
-- Git worktrees — task isolation, not tenancy.
-- One herdr server for every company — that collapses the wall.
+- Git worktrees — Orca's unit. Task isolation inside one company, never the
+  company wall.
+- herdr / tmux / any mux — not part of this product. The ADE owns terminals.
