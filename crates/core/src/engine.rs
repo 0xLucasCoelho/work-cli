@@ -982,8 +982,19 @@ pub fn build_image_at(
     context_dir: &Path,
     dockerfile: &Path,
 ) -> Result<()> {
-    let status = Command::new(engine.binary())
-        .args(["build", "-t", tag, "-f"])
+    let mut command = Command::new(engine.binary());
+    command.args(["build", "-t", tag, "-f"]);
+    // Rootless Podman can leave build containers without the host's normal
+    // route to large release assets (while ordinary `podman run` networking
+    // works). Host networking is scoped to the image-build phase only; runtime
+    // workspace containers still use their dedicated Work network.
+    if Path::new(engine.binary())
+        .file_name()
+        .is_some_and(|name| name == "podman")
+    {
+        command.arg("--network=host");
+    }
+    let status = command
         .arg(dockerfile)
         .arg(".")
         .current_dir(context_dir)
