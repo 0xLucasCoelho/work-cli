@@ -155,6 +155,25 @@ fn hardening_flags_image_mismatch() {
 }
 
 #[test]
+fn hardening_accepts_podman_localhost_image_prefix() {
+    let p = hp(
+        "acme",
+        "unless-stopped",
+        "dev",
+        "localhost/work-base:latest",
+        "work-base:latest",
+        "{}",
+    );
+    assert!(
+        analyze_hardening(&p)
+            .iter()
+            .find(|r| r.label == "acme:image")
+            .unwrap()
+            .ok
+    );
+}
+
+#[test]
 fn hardening_flags_published_ports() {
     let ports = r#"{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"8080"}]}"#;
     let p = hp(

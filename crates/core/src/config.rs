@@ -3,12 +3,21 @@
 //! Global:   `~/.config/work/config.toml`
 //! Per-ws:   `~/.config/work/workspaces/<ws>.toml`
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_IMAGE: &str = "work-base:latest";
+
+fn default_workspace_image() -> String {
+    DEFAULT_IMAGE.to_string()
+}
+
+fn default_legacy_created_at() -> String {
+    "legacy".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalConfig {
@@ -69,6 +78,13 @@ impl Default for UpdatePrefs {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
     pub name: String,
+    /// Preserve fields from older workspace schemas (such as `root` and
+    /// `[env]`) while the current container schema is being adopted.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub legacy_fields: BTreeMap<String, toml::Value>,
+    /// Defaults for configs written by the pre-container-schema version of
+    /// work, which described a host root/env instead of an image.
+    #[serde(default = "default_workspace_image")]
     pub image: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_name: Option<String>,
@@ -82,12 +98,13 @@ pub struct WorkspaceConfig {
     /// (backfilled on next open, never a hard failure).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_id: Option<String>,
-    /// Resolved image ID (`docker image inspect --format {{.Id}}`) recorded at
+    /// Resolved image ID from the selected engine's image inspection command, recorded at
     /// create/recreate. `doctor` compares the running container's image against
     /// this, not the tag string — so a locally-rebuilt `work-base:latest` that
     /// drifted from the recorded digest is flagged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_digest: Option<String>,
+    #[serde(default = "default_legacy_created_at")]
     pub created_at: String,
 }
 
@@ -256,6 +273,23 @@ mod tests {
     fn missing_config_defaults_banner_on() {
         let parsed: GlobalConfig = toml::from_str("").unwrap();
         assert!(parsed.show_banner);
+    }
+
+    #[test]
+    fn legacy_workspace_config_defaults_container_fields() {
+        let parsed: WorkspaceConfig = toml::from_str(
+            r#"
+name = "acme"
+root = "/home/lucas/work/acme"
+
+[env]
+"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.image, DEFAULT_IMAGE);
+        assert_eq!(parsed.created_at, "legacy");
+        assert!(parsed.legacy_fields.contains_key("root"));
+        assert!(parsed.legacy_fields.contains_key("env"));
     }
 
     #[test]

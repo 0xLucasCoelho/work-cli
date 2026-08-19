@@ -9,7 +9,8 @@ use tempfile::TempDir;
 use crate::config::DEFAULT_IMAGE;
 use crate::engine::{build_image_at, Engine};
 
-/// Embedded default Dockerfile (matches the spec's base image).
+/// Embedded default Dockerfile/Containerfile (accepted by Docker-compatible
+/// engines, including Podman).
 pub const DEFAULT_DOCKERFILE: &str = include_str!("../../docker/work-base.Dockerfile");
 
 /// Build the default image `work-base:latest`.
@@ -131,7 +132,7 @@ mod tests {
     fn default_dockerfile_bakes_terminal_and_locale() {
         use super::DEFAULT_DOCKERFILE;
         // Terminfo (xterm-256color) + a UTF-8 locale + a sane default TERM
-        // must be baked in: `docker exec` does not propagate the host
+        // must be baked in: container `exec` does not propagate the host
         // environment, so without these TUI agents and the in-container
         // multiplexer (herdr) render escape codes as literal text.
         assert!(DEFAULT_DOCKERFILE.contains("ncurses-term"));

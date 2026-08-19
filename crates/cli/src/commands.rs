@@ -202,7 +202,7 @@ pub fn image_build(tag: Option<&str>, dockerfile: Option<&std::path::Path>) -> R
     Ok(())
 }
 
-/// `work image init`: scaffold a personal workspace Dockerfile to customize.
+/// `work image init`: scaffold a personal workspace Dockerfile/Containerfile to customize.
 pub fn image_init(output: Option<&std::path::Path>) -> Result<()> {
     let default = std::path::Path::new("Dockerfile.work");
     let path = output.unwrap_or(default);

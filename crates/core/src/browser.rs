@@ -53,12 +53,51 @@ pub fn host_opener_for(os: &str) -> &'static str {
 }
 
 /// Effective host browser opener: `$WORK_HOST_BROWSER` wins if set, else the
-/// OS default. The override is used verbatim — the caller owns it.
+/// OS default. WSL prefers `wslview` when it is installed so a browser URL
+/// opened from the Linux process reaches the Windows host. The override is
+/// used verbatim — the caller owns it.
 pub fn host_opener() -> String {
     if let Some(b) = std::env::var_os("WORK_HOST_BROWSER") {
         return b.to_string_lossy().into_owned();
     }
+    if is_wsl() && command_available("wslview") {
+        return "wslview".into();
+    }
     host_opener_for(std::env::consts::OS).to_string()
+}
+
+/// True when this Linux process is running inside Windows Subsystem for Linux.
+/// WSL exports both variables for normal interactive distributions; accepting
+/// either keeps this helper useful in CI and minimal WSL environments.
+pub fn is_wsl() -> bool {
+    is_wsl_environment(
+        std::env::consts::OS,
+        std::env::var_os("WSL_INTEROP").as_deref(),
+        std::env::var_os("WSL_DISTRO_NAME").as_deref(),
+    )
+}
+
+/// Pure WSL environment predicate used by the host-opener selection.
+pub fn is_wsl_environment(
+    target_os: &str,
+    interop: Option<&std::ffi::OsStr>,
+    distro: Option<&std::ffi::OsStr>,
+) -> bool {
+    target_os == "linux"
+        && [interop, distro]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_empty())
+}
+
+fn command_available(binary: &str) -> bool {
+    Command::new(binary)
+        .arg("--help")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 /// True iff `s` is an `http(s)` URL — the only thing the bridge forwards. PURE.
@@ -228,6 +267,14 @@ mod tests {
         assert_eq!(host_opener_for("macos"), "open");
         assert_eq!(host_opener_for("linux"), "xdg-open");
         assert_eq!(host_opener_for("freebsd"), "xdg-open"); // unknown -> xdg-open
+    }
+
+    #[test]
+    fn wsl_environment_is_linux_only() {
+        let marker = std::ffi::OsStr::new("1");
+        assert!(is_wsl_environment("linux", Some(marker), None));
+        assert!(!is_wsl_environment("macos", Some(marker), None));
+        assert!(!is_wsl_environment("windows", None, Some(marker)));
     }
 
     #[test]

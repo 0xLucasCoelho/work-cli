@@ -65,7 +65,7 @@ impl Workspace {
 
     /// Enforce that the active daemon matches the one this workspace was created
     /// on. A workspace created on daemon A that later resolves to daemon B (a
-    /// changed DOCKER_HOST / context / a second Colima instance) is refused —
+    /// changed engine endpoint/context / a second engine instance) is refused —
     /// names are not an isolation boundary across daemons. `daemon_id == None`
     /// (created before this field existed) is backfilled on first open, never a
     /// hard failure; a daemon that won't report an ID is treated as unverified.
@@ -112,7 +112,7 @@ impl Workspace {
         let engine = crate::engine::detect()?;
         if !engine.is_running()? {
             bail!(
-                "container engine '{}' is not running; start OrbStack/Docker first",
+                "container engine '{}' is not running; start it first (on macOS/WSL, also start the Podman machine if applicable)",
                 engine.binary()
             );
         }
@@ -176,7 +176,8 @@ impl Workspace {
             if !engine.object_has_label(&vol, "volume", naming::LABEL_KEY)? {
                 bail!(
                     "volume '{vol}' exists but isn't work-managed — refusing to reuse it. Remove \
-                     it manually (e.g. `docker volume rm {vol}`) if you know it's safe."
+                     it manually (e.g. `{} volume rm {vol}`) if you know it's safe.",
+                    engine.binary()
                 );
             }
         } else {
@@ -186,7 +187,8 @@ impl Workspace {
             if !engine.object_has_label(&net, "network", naming::LABEL_KEY)? {
                 bail!(
                     "network '{net}' exists but isn't work-managed — refusing to reuse it. Remove \
-                     it manually (e.g. `docker network rm {net}`) if you know it's safe."
+                     it manually (e.g. `{} network rm {net}`) if you know it's safe.",
+                    engine.binary()
                 );
             }
         } else {
@@ -205,6 +207,7 @@ impl Workspace {
         let image_digest = engine.image_id(&image).ok();
         let cfg = WorkspaceConfig {
             name: name.to_string(),
+            legacy_fields: std::collections::BTreeMap::new(),
             image,
             git_name: git_name.clone(),
             git_email: git_email.clone(),
@@ -280,7 +283,7 @@ impl Workspace {
     }
 
     /// Cheap isolation gate before attach: the container must be on its own
-    /// network and mount only its own volume. Catches drift a manual `docker
+    /// network and mount only its own volume. Catches drift a manual engine
     /// network connect` / cross-mounted volume introduces — `work doctor` would
     /// flag it, but nothing previously checked the hot path, so every `work <ws>`
     /// attached to a drifted container without complaint.
@@ -343,7 +346,7 @@ impl Workspace {
             .exec_interactive(&ctr, &["herdr"], self.cfg.shell.as_deref().unwrap_or("zsh"))
     }
 
-    /// Gather hostname/OS/git-branch via one `docker exec` and print the banner.
+    /// Gather hostname/OS/git-branch via one engine `exec` and print the banner.
     /// Fail-soft: any error renders the dynamic fields as "—".
     fn print_banner(&self, ctr: &str) {
         let probe = "h=$(hostname 2>/dev/null); . /etc/os-release 2>/dev/null; s=${PRETTY_NAME:-}; g=$(git -C /home/dev rev-parse --abbrev-ref HEAD 2>/dev/null || true); printf '%s\\t%s\\t%s' \"$h\" \"$s\" \"$g\"";
@@ -439,11 +442,14 @@ impl Workspace {
             self.engine.remove_container(&ctr)?; // `rm -f` stops + removes
         }
         // The network may be held by a lingering forwarder (work-fwd-*); best-effort
-        // + warn rather than failing this data-safe removal.
-        if let Err(e) = self.engine.remove_network(&net) {
-            eprintln!(
-                "· could not remove network {net} ({e}); stop any `work fwd` for this workspace first"
-            );
+        // + warn rather than failing this data-safe removal. A missing network
+        // is already clean and should not produce a misleading warning.
+        if self.engine.network_exists(&net)? {
+            if let Err(e) = self.engine.remove_network(&net) {
+                eprintln!(
+                    "· could not remove network {net} ({e}); stop any `work fwd` for this workspace first"
+                );
+            }
         }
         if purge && self.engine.volume_exists(&vol)? {
             self.engine.remove_volume(&vol)?;
@@ -537,7 +543,7 @@ impl Workspace {
             }
         };
 
-        // `docker cp` + `chown` need the container up.
+        // Engine copy + `chown` need the container up.
         self.ensure_running()?;
         let ctr = naming::container(&self.cfg.name);
 
@@ -639,7 +645,7 @@ fn file_sha256(path: &Path) -> Result<String> {
 }
 
 /// Compare a host file against its in-container counterpart by sha256. The
-/// container hash comes from `docker exec sha256sum <dest>` (coreutils, present
+/// container hash comes from engine `exec sha256sum <dest>` (coreutils, present
 /// on every base image). A missing file or any read error resolves to `Missing`
 /// — the apply step then creates it; a transient exec failure is unlikely
 /// because `update` ensures the container is running first.
@@ -656,7 +662,7 @@ fn file_status(engine: &dyn Engine, ctr: &str, host: &Path, dest: &str) -> Resul
     })
 }
 
-/// `docker run` options for a workspace container. Sets the `WORK`/`WORKSPACE`
+/// `run` options for a workspace container. Sets the `WORK`/`WORKSPACE`
 /// identity env, the xdg-open browser shim, and `NERD_FONTS=1`: the in-container
 /// multiplexer (herdr) makes agents like omp see `TERM_PROGRAM=herdr` instead of
 /// the host terminal, so their Nerd-Font auto-detection fails and they fall back
@@ -723,7 +729,7 @@ pub fn list_all() -> Result<Vec<WorkspaceStatus>> {
 
 /// `work fwd <ws> <port>`: bridge `127.0.0.1:<port>` (host) to `<ws>:<port>`.
 /// Runs the forwarder in the foreground on the workspace's dedicated network;
-/// Ctrl-C lets `docker run` stop + `--rm` the container.
+/// Ctrl-C lets the selected engine's `run` stop + `--rm` the container.
 pub fn forward(name: &str, port: u16) -> Result<()> {
     let ws = Workspace::open(name)?;
     ws.ensure_running()?;
@@ -734,7 +740,7 @@ pub fn forward(name: &str, port: u16) -> Result<()> {
     }
     println!("Forwarding http://127.0.0.1:{port} -> {name}:{port}");
     println!("(Ctrl-C to stop the bridge)");
-    // Blocks until interrupted; cleanup is handled by `docker run --rm`.
+    // Blocks until interrupted; cleanup is handled by the selected engine's `run --rm`.
     engine.run_forwarder(
         &fwd_name,
         &naming::network(name),
@@ -781,7 +787,7 @@ pub fn browse(name: &str) -> Result<()> {
         &mut guard,
     );
     // Cleanup forwarders on normal/error exit. Ctrl-C is handled by the process
-    // group receiving SIGINT -> each `docker run --rm` forwarder stops + removes.
+    // group receiving SIGINT -> each engine `run --rm` forwarder stops + removes.
     for fwd in &fwd_names {
         let _ = engine.remove_container(fwd);
     }

@@ -67,7 +67,7 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
     let engine = work_core::engine::detect()?;
     if !engine.is_running().unwrap_or(false) {
         anyhow::bail!(
-            "container engine '{}' is not running; start OrbStack/Docker first (or use `work ls`)",
+            "container engine '{}' is not running; start it first (on macOS/WSL, also start the Podman machine if applicable; or use `work ls`)",
             engine.binary()
         );
     }

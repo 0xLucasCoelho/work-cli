@@ -17,7 +17,8 @@ report privately via one of:
 Please include:
 
 - A description of the issue and its impact.
-- Steps to reproduce, including the engine used (OrbStack / Docker / Podman / Colima).
+- Steps to reproduce, including the host platform, WSL2 status when applicable,
+  and the engine used (Podman, Docker, OrbStack, or Colima).
 - The `work doctor` output for the affected workspaces.
 
 We aim to acknowledge reports within **72 hours**.
@@ -40,11 +41,17 @@ These are explicitly **not** part of `work`'s threat model (see
 - **Kernel / container-engine escapes.** `work` relies on the OS container
   boundary; the adversary is a *non-malicious* AI agent that may read the
   filesystem and persist memory — not a hostile workload targeting the kernel.
+  Report engine or kernel escapes to the relevant upstream project (Podman,
+  Docker, OrbStack, Colima, WSL2, or the host OS) as well as to us when the
+  `work` integration contributes to the exposure.
 - **What users install inside their own workspaces.** `work` provides the
   sandbox; the user installs and authenticates their own tools and is
   responsible for their contents.
-- **The host kernel or container runtime itself.** Report those upstream
-  (OrbStack / Docker / Podman / Colima / Linux).
+- **The host kernel or container runtime itself.** Report those upstream. The
+  supported runtime boundary is platform-specific: Podman is preferred on
+  Linux and WSL2, Podman machine/Podman Desktop is supported on macOS, and
+  Docker-compatible engines remain compatibility paths. Native Windows
+  containers and native Windows backends are out of scope.
 
 ## Hardening you can verify
 
@@ -52,6 +59,7 @@ Run `work doctor` — it enforces, per workspace: a unique dedicated network, on
 its own home volume mounted, non-root user, image matching config, and no
 published host ports.
 
-For the full setup walkthrough, the threat model, and the exact `docker run`
-flags that enforce each invariant, see
+For the full setup walkthrough, the threat model, and the runtime-neutral
+flags (with a clearly labeled Docker-compatible CLI example) that enforce each
+invariant, see
 [`docs/SETUP_AND_ISOLATION.md`](docs/SETUP_AND_ISOLATION.md).

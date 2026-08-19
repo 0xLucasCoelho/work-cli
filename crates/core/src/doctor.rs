@@ -1,4 +1,4 @@
-//! Isolation verification. Collection (docker inspect via engine) is separate
+//! Isolation verification. Collection (engine inspection via the selected CLI) is separate
 //! from analysis (pure), so analysis is unit-testable.
 
 use std::collections::BTreeSet;
@@ -36,7 +36,7 @@ pub struct HardeningProbe {
     /// `{{.Image}}` (the sha the container actually runs). `None` if unreadable.
     pub running_image_id: Option<String>,
     /// The configured tag's image id RE-RESOLVED at check time
-    /// (`docker image inspect --format {{.Id}} <cfg.image>`). Compared against
+    /// (the selected engine's image inspect command). Compared against
     /// `running_image_id` to detect tag drift (a rebuilt work-base:latest).
     pub resolved_image_id: Option<String>,
     /// True iff the container carries the work managed label.
@@ -134,6 +134,19 @@ fn published_port_count(ports_json: &str) -> usize {
         .sum()
 }
 
+/// Podman qualifies locally built short image names with `localhost/` when
+/// reporting `.Config.Image`; Docker-compatible engines generally preserve the
+/// short name. Treat only that implicit local-registry prefix as equivalent.
+fn image_refs_match(actual: &str, configured: &str) -> bool {
+    actual == configured
+        || actual
+            .strip_prefix("localhost/")
+            .is_some_and(|short| short == configured)
+        || configured
+            .strip_prefix("localhost/")
+            .is_some_and(|short| short == actual)
+}
+
 /// Per-workspace hardening: restart policy, non-root user, image matches
 /// config, and no published host ports (isolation). PURE.
 pub fn analyze_hardening(p: &HardeningProbe) -> Vec<CheckResult> {
@@ -168,7 +181,7 @@ pub fn analyze_hardening(p: &HardeningProbe) -> Vec<CheckResult> {
         },
     });
 
-    let img_ok = p.image == p.configured_image;
+    let img_ok = image_refs_match(&p.image, &p.configured_image);
     out.push(CheckResult {
         label: format!("{}:image", p.ws),
         ok: img_ok,
@@ -353,7 +366,8 @@ pub fn run(engine: &dyn Engine) -> Result<Vec<CheckResult>> {
                     "managed forwarder running (stop its `work fwd`/`work browse` to clear)".into()
                 } else {
                     format!(
-                        "unmanaged forwarder — likely an orphan; remove with `docker rm -f {ctr}`"
+                        "unmanaged forwarder — likely an orphan; remove with `{} rm -f {ctr}`",
+                        engine.binary()
                     )
                 },
             });

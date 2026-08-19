@@ -4,6 +4,7 @@ use work_core::config::{GlobalConfig, WorkspaceConfig};
 fn workspace_config_round_trips_toml() {
     let cfg = WorkspaceConfig {
         name: "acme".into(),
+        legacy_fields: std::collections::BTreeMap::new(),
         image: "work-base:latest".into(),
         git_name: Some("Jane Doe".into()),
         git_email: Some("jane@acme.io".into()),

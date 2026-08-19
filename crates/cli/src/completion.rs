@@ -17,7 +17,7 @@ use std::ffi::OsStr;
 use clap_complete::engine::CompletionCandidate;
 
 /// Lazy completer for EXISTING workspace names (attached to the args of
-/// start/stop/tab/tabs/rm/fwd/browse/config). Reads ONLY the config dir (no docker).
+/// start/stop/tab/tabs/rm/fwd/browse/config). Reads ONLY the config dir (no engine calls).
 pub fn complete_workspace(current: &OsStr) -> Vec<CompletionCandidate> {
     let Some(prefix) = current.to_str() else {
         return Vec::new();

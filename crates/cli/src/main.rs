@@ -57,7 +57,10 @@ enum Command {
     Stop {
         /// Workspace to stop.
         #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
-        name: String,
+        name: Option<String>,
+        /// Stop every workspace (alias for `work stop-all`).
+        #[arg(long, conflicts_with = "name")]
+        all: bool,
     },
     /// Stop every workspace.
     #[command(name = "stop-all")]
@@ -124,7 +127,7 @@ enum Command {
         #[arg(long)]
         purge: bool,
     },
-    /// Isolation + engine sanity check.
+    /// Isolation + selected-engine sanity check.
     ///
     /// Verifies each workspace is on its own network, mounts only its own
     /// volume, runs non-root, uses the configured image, and publishes no host
@@ -170,17 +173,17 @@ enum ImageCmd {
         /// Image tag to build (defaults to work-base:latest).
         #[arg(long)]
         tag: Option<String>,
-        /// Path to a Dockerfile (required for a non-default --tag).
+        /// Path to a Dockerfile/Containerfile (required for a non-default --tag).
         #[arg(long)]
         dockerfile: Option<PathBuf>,
     },
-    /// Scaffold a personal workspace Dockerfile (extends work-base) to customize.
+    /// Scaffold a personal workspace Dockerfile/Containerfile (extends work-base) to customize.
     ///
     /// Writes a starter Dockerfile with a working baseline, commented tool
     /// examples, and the glibc/musl gotcha documented. Edit it, then
     /// `work image build`.
     Init {
-        /// Where to write the Dockerfile (defaults to ./Dockerfile.work).
+        /// Where to write the Dockerfile/Containerfile (defaults to ./Dockerfile.work).
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -252,7 +255,16 @@ fn main() -> Result<ExitCode> {
         )?,
         Some(Command::Ls) => commands::ls()?,
         Some(Command::Start { name }) => commands::start(&name)?,
-        Some(Command::Stop { name }) => commands::stop(&name, cli.yes)?,
+        Some(Command::Stop { name, all }) => {
+            if all {
+                commands::stop_all(cli.yes)?;
+            } else {
+                let name = name.ok_or_else(|| {
+                    anyhow::anyhow!("specify a workspace or use `work stop --all`")
+                })?;
+                commands::stop(&name, cli.yes)?;
+            }
+        }
         Some(Command::StopAll) => commands::stop_all(cli.yes)?,
         Some(Command::Fwd { ws, port }) => commands::fwd(&ws, port)?,
         Some(Command::Browse { ws }) => commands::browse(&ws)?,
@@ -352,6 +364,20 @@ mod tests {
             parse(&["stop", "x"]).command,
             Some(Command::Stop { .. })
         ));
+    }
+
+    #[test]
+    fn stop_all_flag_is_supported() {
+        match parse(&["stop", "--all"]).command {
+            Some(Command::Stop { name, all }) => {
+                assert!(name.is_none());
+                assert!(all);
+            }
+            other => panic!(
+                "expected stop --all, got discriminant {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
     }
 
     #[test]
