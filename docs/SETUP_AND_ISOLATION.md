@@ -15,6 +15,25 @@ is no path — filesystem or network — from one workspace to another. `work` h
 **no secrets** and **never moves credentials around**. `work doctor` re-checks
 every one of these guarantees on demand.
 
+The host engine is a portability layer, not part of the isolation model:
+
+- **Linux:** Podman is the preferred engine, rootless where practical; Docker is
+  the Docker-compatible fallback.
+- **macOS:** Podman machine and Podman Desktop are supported. Docker, OrbStack,
+  and Colima remain compatible alternatives; OrbStack is not the default.
+- **Windows:** WSL2 only. Install and run `work` inside the WSL2 distribution,
+  with Podman available inside that distribution. Native Windows containers and
+  native Windows backends are out of scope.
+
+Automatic engine selection follows that platform policy. `WORK_ENGINE` accepts
+`podman|docker|orbstack|colima` and overrides automatic selection; it must name
+an installed, running engine and is most useful for testing or for choosing
+between multiple local backends. An invalid or unavailable override fails
+instead of silently selecting a different engine.
+
+This platform and selection contract is captured in the new
+[`multiplatform portability design note`](superpowers/specs/2026-08-17-multiplatform-portability-design.md).
+
 ```mermaid
 flowchart LR
   HOST["Your laptop (host)"]
@@ -59,7 +78,7 @@ data breach**. Source: [`SECURITY.md`](../SECURITY.md), and the design spec's
 
 | Defends against (by design) | Out of scope (by design) |
 |---|---|
-| A *non-malicious* agent in workspace A reading workspace B's files/creds/memory | Kernel / container-engine escapes (report those to OrbStack/Docker/Podman upstream) |
+| A *non-malicious* agent in workspace A reading workspace B's files/creds/memory | Kernel / container-engine escapes (report those to the relevant engine upstream) |
 | One workspace reaching another's network or volume | What you choose to install/audit *inside* your own workspace |
 | Credentials leaking across clients on shared hardware | A *hostile* workload attacking the kernel |
 
@@ -108,18 +127,23 @@ This is the core "behind the scenes." (Source: `Workspace::create` in
 [`crates/core/src/workspace.rs`](../crates/core/src/workspace.rs), ~lines 67–206.)
 
 1. **Validate** the name and reject duplicates.
-2. **Detect the container engine** — auto-picks OrbStack → Docker → Podman →
-   Colima (in that locked order). The `docker` CLI is the common substrate;
-   Podman uses its CLI-compatible `podman` binary.
-   (Source: `detect()` in [`crates/core/src/engine.rs`](../crates/core/src/engine.rs).)
+2. **Select the container engine** — prefer Podman on Linux and in WSL2, prefer
+   Podman on macOS when available, then use a Docker-compatible fallback. On
+   macOS, OrbStack and Colima remain supported compatibility choices. An
+   explicit `WORK_ENGINE` override takes precedence. The selected CLI is used
+   for all lifecycle operations;
+   Podman uses `podman`, while Docker-compatible engines use their compatible
+   `docker` command.
+   (Selection is implemented by `detect()` in
+   [`crates/core/src/engine.rs`](../crates/core/src/engine.rs).)
 3. **Ensure the base image exists** — build `work-base:latest` on first use, or
    pull a custom image you configured. (`ensure_image`.)
 4. **Validate import sources first** (before creating anything), so a bad path
    fails fast with **no orphaned volume/network/container** left behind.
 5. **Create the resources** — only three primitives:
-   - `docker volume create work-<ws>-home`
-   - `docker network create work-net-<ws>`
-   - `docker run …` (see the exact command in §6)
+   - `<engine> volume create work-<ws>-home`
+   - `<engine> network create work-net-<ws>`
+   - `<engine> run …` (see the compatibility example in §6)
 6. **Install the browser bridge shim** (best-effort) so in-container tools can
    later forward `xdg-open`/OAuth URLs to your host browser.
 7. **Seed configs (optional)** — copy dotfiles/shell/herdr/starship config **into
@@ -135,12 +159,17 @@ Nothing in this sequence reads, stores, or transports a secret.
 
 ---
 
-## 6. The exact `docker run` that builds the wall
+## 6. The runtime command that builds the wall
 
-`run_opts()` builds the options; `Engine::run()` turns them into flags.
+`run_opts()` builds the options; `Engine::run()` turns them into flags for the
+selected runtime CLI. The command shape is the same across the supported
+Docker-compatible interfaces.
 (Source: `workspace.rs` `run_opts` + `engine.rs` `run`.)
 
-The effective command for a workspace `acme`:
+For compatibility documentation, the effective command for a workspace `acme`
+is shown below using the Docker CLI spelling. With Podman, replace the leading
+`docker` with `podman`; do not interpret this example as a requirement to run
+Docker or to use a Docker Desktop backend:
 
 ```bash
 docker run -d \
@@ -177,8 +206,9 @@ tools can name the workspace); they carry no secret.
 
 ## 7. `work doctor` — how isolation is verified
 
-`doctor` collects facts via `docker inspect` and runs **pure, unit-tested**
-analysis over them. (Source: [`crates/core/src/doctor.rs`](../crates/core/src/doctor.rs).)
+`doctor` collects facts via the selected runtime's inspect interface and runs
+**pure, unit-tested** analysis over them. (Source:
+[`crates/core/src/doctor.rs`](../crates/core/src/doctor.rs).)
 
 Per workspace it checks:
 
@@ -242,6 +272,7 @@ into the volume, and `work` warns you to make sure it is **secret-free**.
 | `work new <ws>` | create volume + network + container | — |
 | `work <ws>` | ensure running; attach to the in-container herdr runtime | yes |
 | `work stop <ws>` | stop the container (ends the session; **files persist**) | yes |
+| `work stop --all` / `work stop-all` | stop every workspace container | yes |
 | `work start <ws>` | start again | yes |
 | `work rm <ws>` | remove container + network + config; **keep the volume** | yes |
 | `work rm <ws> --purge` | also **delete the volume** (irreversible) | **data loss** |
@@ -257,12 +288,69 @@ there is a **live session** to lose.
 
 ```bash
 work doctor                       # re-checks every invariant for every workspace
+# Use the selected CLI. This Docker spelling is a compatibility example:
 docker inspect work-acme --format '{{json .NetworkSettings.Networks}}'
 docker inspect work-acme --format '{{json .Mounts}}'
 docker inspect work-acme --format '{{.Config.User}} · {{json .NetworkSettings.Ports}}'
 ```
 
+With Podman, run the same inspections as `podman inspect …`. The output should
+be equivalent for the fields used by this guide.
+
 For `acme` you should see: exactly one network (`work-net-acme`), exactly one
 volume mount (`work-acme-home` → `/home/dev`), a non-root user, and no published
 ports — and the **same** for every other workspace, each on its own network and
 volume.
+
+## 12. Engine and platform troubleshooting
+
+### Podman on Linux
+
+Prefer a rootless installation. Run `podman info` as the same user that will run
+`work`; using `sudo podman` creates a different engine state and can make
+workspaces appear to be missing. If the command fails, start or repair the
+Podman service according to your distribution, then rerun `podman info` and
+`work doctor`.
+
+### Podman machine on macOS
+
+Podman on macOS requires a running Linux machine. Check it with:
+
+```bash
+podman machine list
+podman machine start
+podman info
+```
+
+If no machine exists, initialize one with `podman machine init` before starting
+it. Podman Desktop can perform the same lifecycle operations. A stopped machine
+is different from a missing CLI: install the CLI first, then start the machine.
+
+### Windows + WSL2
+
+`work` is supported only from a WSL2 Linux distribution. From Windows,
+`wsl --status` and `wsl -l -v` can confirm that WSL2 is enabled; inside the
+distribution, verify `podman info` and run `work doctor`. Install Podman inside
+the distribution rather than relying on a Windows-only Podman or Docker backend.
+Native Windows containers, PowerShell execution, and a Windows-native engine
+are not supported paths.
+
+### Override and test the selected engine
+
+Use an override to avoid ambiguous local installations:
+
+```bash
+WORK_ENGINE=podman work doctor
+WORK_ENGINE=docker work doctor
+```
+
+The override is a selection request, not a way to start an engine or convert an
+existing workspace between daemons. If a workspace was created on another
+daemon, switch back to that engine or treat the migration as a separate data
+operation; never assume two engines share volumes.
+
+Finally, a passing unit suite or `work doctor` run is not proof of end-to-end
+compatibility. The real integration tests must run against a live engine and
+exercise create, inspect, attach, lifecycle, and cleanup behavior. Contributors
+should run the ignored integration suite documented in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md).

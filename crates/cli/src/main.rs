@@ -39,6 +39,11 @@ enum Command {
     /// Examples: `work new acme`; `work new acme --git-name 'Jane' --git-email j@x.io`;
     /// `work new acme --import-shell-config` (seed ~/.zshrc); `work new acme --image my-work:latest`.
     New(NewArgs),
+    /// List the built-in non-secret profiles or set the default for future workspaces.
+    Profile {
+        #[command(subcommand)]
+        action: ProfileCmd,
+    },
     /// List workspaces with container state and session liveness.
     ///
     /// Columns: WORKSPACE, STATE (running/stopped/missing), SESSION (live if the
@@ -57,7 +62,10 @@ enum Command {
     Stop {
         /// Workspace to stop.
         #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
-        name: String,
+        name: Option<String>,
+        /// Stop every workspace (alias for `work stop-all`).
+        #[arg(long, conflicts_with = "name")]
+        all: bool,
     },
     /// Stop every workspace.
     #[command(name = "stop-all")]
@@ -100,8 +108,17 @@ enum Command {
         #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
         ws: String,
         /// Open the config in $EDITOR (default vi), then re-apply/recreate.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["pids_limit", "browser_confirmation", "browser_profile"])]
         edit: bool,
+        /// Per-workspace process/thread cap (64 through 131072). Applies by a confirmed recreate.
+        #[arg(long = "pids-limit")]
+        pids_limit: Option<u32>,
+        /// Browser host confirmation: prompt (default) or trusted (explicit opt-in).
+        #[arg(long = "browser-confirmation")]
+        browser_confirmation: Option<String>,
+        /// Browser profile on macOS: guest (default) or default.
+        #[arg(long = "browser-profile")]
+        browser_profile: Option<String>,
     },
     /// Build or scaffold workspace images.
     #[command(name = "image")]
@@ -124,12 +141,18 @@ enum Command {
         #[arg(long)]
         purge: bool,
     },
-    /// Isolation + engine sanity check.
+    /// Isolation + selected-engine sanity check.
     ///
     /// Verifies each workspace is on its own network, mounts only its own
     /// volume, runs non-root, uses the configured image, and publishes no host
     /// ports.
     Doctor,
+    /// Inspect or explicitly recover a workspace after its container engine
+    /// changes. Rebinding never adopts partial or unmanaged resources.
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonCmd,
+    },
     /// Re-sync managed config files into a running workspace (no rebuild).
     ///
     /// Pushes the current dotfiles/templates into a container's `/home/dev` in
@@ -170,20 +193,45 @@ enum ImageCmd {
         /// Image tag to build (defaults to work-base:latest).
         #[arg(long)]
         tag: Option<String>,
-        /// Path to a Dockerfile (required for a non-default --tag).
+        /// Path to a Dockerfile/Containerfile (required for a non-default --tag).
         #[arg(long)]
         dockerfile: Option<PathBuf>,
     },
-    /// Scaffold a personal workspace Dockerfile (extends work-base) to customize.
+    /// Scaffold a personal workspace Dockerfile/Containerfile (extends work-base) to customize.
     ///
     /// Writes a starter Dockerfile with a working baseline, commented tool
     /// examples, and the glibc/musl gotcha documented. Edit it, then
     /// `work image build`.
     Init {
-        /// Where to write the Dockerfile (defaults to ./Dockerfile.work).
+        /// Where to write the Dockerfile/Containerfile (defaults to ./Dockerfile.work).
         #[arg(long)]
         output: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum DaemonCmd {
+    /// Show the recorded and active daemon plus the active daemon's workspace-resource state.
+    Status {
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
+        ws: String,
+    },
+    /// Rebind only when the active daemon has the complete managed isolated workspace.
+    Rebind {
+        #[arg(add = ArgValueCompleter::new(completion::complete_workspace))]
+        ws: String,
+        /// Required acknowledgement before changing the workspace's recorded daemon.
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileCmd {
+    /// Show built-in profiles and the current default.
+    List,
+    /// Set the default profile for future `work new` calls.
+    SetDefault { name: String },
 }
 
 /// Tokens that are CLI verbs (not workspace names). Used by `normalize_help_arg`.
@@ -239,9 +287,14 @@ fn main() -> Result<ExitCode> {
                 commands::ls()?;
             }
         }
-        Some(Command::New(a)) => commands::new(
+        Some(Command::New(a)) => commands::new_with_profile(
             &a.name,
             a.image,
+            a.profile,
+            a.shell,
+            a.pids_limit,
+            a.browser_confirmation,
+            a.browser_profile,
             a.git_name,
             a.git_email,
             a.import_shell_config,
@@ -250,15 +303,45 @@ fn main() -> Result<ExitCode> {
             a.import_dotfiles,
             a.use_author_default,
         )?,
+        Some(Command::Profile { action }) => match action {
+            ProfileCmd::List => commands::profile_list()?,
+            ProfileCmd::SetDefault { name } => commands::profile_set_default(&name)?,
+        },
         Some(Command::Ls) => commands::ls()?,
         Some(Command::Start { name }) => commands::start(&name)?,
-        Some(Command::Stop { name }) => commands::stop(&name, cli.yes)?,
+        Some(Command::Stop { name, all }) => {
+            if all {
+                commands::stop_all(cli.yes)?;
+            } else {
+                let name = name.ok_or_else(|| {
+                    anyhow::anyhow!("specify a workspace or use `work stop --all`")
+                })?;
+                commands::stop(&name, cli.yes)?;
+            }
+        }
         Some(Command::StopAll) => commands::stop_all(cli.yes)?,
         Some(Command::Fwd { ws, port }) => commands::fwd(&ws, port)?,
         Some(Command::Browse { ws }) => commands::browse(&ws)?,
-        Some(Command::Config { ws, edit }) => {
+        Some(Command::Config {
+            ws,
+            edit,
+            pids_limit,
+            browser_confirmation,
+            browser_profile,
+        }) => {
             if edit {
                 commands::config_edit(&ws, cli.yes)?;
+            } else if pids_limit.is_some()
+                || browser_confirmation.is_some()
+                || browser_profile.is_some()
+            {
+                commands::config_set_preferences(
+                    &ws,
+                    pids_limit,
+                    browser_confirmation,
+                    browser_profile,
+                    cli.yes,
+                )?;
             } else {
                 commands::config_show(&ws)?;
             }
@@ -275,6 +358,10 @@ fn main() -> Result<ExitCode> {
         Some(Command::Doctor) => {
             return commands::doctor();
         }
+        Some(Command::Daemon { action }) => match action {
+            DaemonCmd::Status { ws } => commands::daemon_status(&ws)?,
+            DaemonCmd::Rebind { ws, confirm } => commands::daemon_rebind(&ws, confirm)?,
+        },
         Some(Command::Update(a)) => commands::update(&a)?,
         Some(Command::Harden { ws, all }) => commands::harden(ws.as_deref(), all, cli.yes)?,
         Some(Command::Other(args)) => {
@@ -355,7 +442,72 @@ mod tests {
     }
 
     #[test]
+    fn stop_all_flag_is_supported() {
+        match parse(&["stop", "--all"]).command {
+            Some(Command::Stop { name, all }) => {
+                assert!(name.is_none());
+                assert!(all);
+            }
+            other => panic!(
+                "expected stop --all, got discriminant {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
     fn bare_work_is_none() {
         assert!(parse(&[]).command.is_none());
+    }
+
+    #[test]
+    fn daemon_rebind_requires_explicit_confirmation_flag() {
+        match parse(&["daemon", "rebind", "acme", "--confirm"]).command {
+            Some(Command::Daemon {
+                action: DaemonCmd::Rebind { ws, confirm },
+            }) => {
+                assert_eq!(ws, "acme");
+                assert!(confirm);
+            }
+            _ => panic!("expected daemon rebind"),
+        }
+    }
+
+    #[test]
+    fn new_profile_and_shell_flags_parse() {
+        match parse(&["new", "acme", "--profile", "developer", "--shell", "fish"]).command {
+            Some(Command::New(args)) => {
+                assert_eq!(args.profile.as_deref(), Some("developer"));
+                assert_eq!(args.shell.as_deref(), Some("fish"));
+            }
+            _ => panic!("expected new command"),
+        }
+    }
+
+    #[test]
+    fn workspace_preference_flags_parse_on_create_and_update() {
+        match parse(&[
+            "new",
+            "acme",
+            "--pids-limit",
+            "8192",
+            "--browser-confirmation",
+            "trusted",
+            "--browser-profile",
+            "default",
+        ])
+        .command
+        {
+            Some(Command::New(args)) => {
+                assert_eq!(args.pids_limit, Some(8192));
+                assert_eq!(args.browser_confirmation.as_deref(), Some("trusted"));
+                assert_eq!(args.browser_profile.as_deref(), Some("default"));
+            }
+            _ => panic!("expected new command"),
+        }
+        match parse(&["config", "acme", "--pids-limit", "8192"]).command {
+            Some(Command::Config { pids_limit, .. }) => assert_eq!(pids_limit, Some(8192)),
+            _ => panic!("expected config command"),
+        }
     }
 }

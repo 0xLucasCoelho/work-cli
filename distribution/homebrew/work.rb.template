@@ -17,8 +17,14 @@ class Work < Formula
     end
   end
   on_linux do
-    url "https://github.com/0xlucascoelho/work-cli/releases/download/v@VERSION@/work-x86_64-unknown-linux-gnu.tar.gz"
-    sha256 "@LINUX_SHA@"
+    on_arm do
+      url "https://github.com/0xlucascoelho/work-cli/releases/download/v@VERSION@/work-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "@LINUX_ARM64_SHA@"
+    end
+    on_intel do
+      url "https://github.com/0xlucascoelho/work-cli/releases/download/v@VERSION@/work-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "@LINUX_SHA@"
+    end
   end
 
   def install

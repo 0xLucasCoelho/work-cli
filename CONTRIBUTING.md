@@ -20,12 +20,29 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-You'll need a container engine (OrbStack / Docker / Podman / Colima) for
-end-to-end checks:
+You'll need a live supported container engine for end-to-end checks. The
+preferred contributor setup is rootless Podman on Linux, Podman machine or
+Podman Desktop on macOS, and Podman inside a WSL2 distribution on Windows.
+Docker-compatible engines are useful fallback and compatibility targets;
+OrbStack and Colima are macOS compatibility targets, not project defaults.
+
+| Host | Contributor requirement |
+|---|---|
+| Linux | Podman preferred, rootless where practical; Docker-compatible fallback supported. |
+| macOS | Podman machine/Podman Desktop supported; Docker, OrbStack, and Colima may be used for compatibility checks. |
+| Windows | WSL2 only; install the project and engine inside the WSL2 distro. Native Windows containers/backends are out of scope. |
+
+Before running the CLI, verify the backend from the same shell that will run
+the tests:
 
 ```bash
-cargo run -q -- doctor          # engine + isolation sanity
+podman info                      # preferred path
+cargo run -q -- doctor           # engine + isolation sanity
 ```
+
+For a Docker-compatible fallback, use `docker info`; on macOS, start the
+Podman machine first with `podman machine start`. On Windows, run these commands
+inside WSL2, never from PowerShell or Command Prompt.
 
 ## Code quality gates (must pass before merge)
 
@@ -35,31 +52,46 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Integration tests that talk to a real engine are marked `#[ignore]`; run them
-explicitly when you have an engine available:
+Integration tests that talk to a real engine are marked `#[ignore]`; they are a
+required compatibility check for changes affecting engine selection, workspace
+lifecycle, isolation, images, or browser/port bridging. Run them explicitly
+with a live backend:
 
 ```bash
 cargo test --workspace -- --ignored
 ```
+
+Unit tests and `work doctor` are not substitutes for this test: the ignored
+suite is the evidence that the selected CLI and backend can really create,
+inspect, attach to, and clean up a workspace.
 
 ## Architecture notes for contributors
 
 - **Isolation logic lives in exactly one place: `crates/core`.** The CLI is a
   thin client. Don't push isolation decisions into the CLI.
 - **The engine is abstracted.** `crates/core/src/engine.rs` defines the `Engine`
-  trait; `DockerCli` is the adapter that shells out to the `docker` binary
-  (OrbStack, Docker, and Colima all expose it; Podman is CLI-compatible).
-  Auto-detection order is OrbStack → Docker → Podman → Colima.
+  trait and one CLI adapter. Selection is platform-aware: Podman is preferred
+  on Linux, WSL2, and macOS, with Docker-compatible fallback and OrbStack/
+  Colima compatibility on macOS. The adapter must invoke the selected CLI
+  (`podman` for Podman; the compatible `docker` command for Docker-compatible
+  engines), not assume that the host is Docker Desktop.
+- **Explicit selection is part of the portability contract.**
+  `WORK_ENGINE=podman|docker|orbstack|colima` overrides automatic selection
+  for the current command. Invalid, unavailable, or stopped selections should
+  fail with an actionable diagnostic rather than silently switching to another
+  daemon.
 - **Pure functions are unit-tested; shell-out paths are verified at milestones.**
   Keep decision logic (naming, validation, config, isolation/hardening analysis)
-  separate from collection (docker calls) so it stays testable.
+  separate from collection (selected-engine calls) so it stays testable.
 
 ### Adding support for a new container runtime
 
-If a runtime exposes a docker-compatible CLI, detection + the `docker` binary
-usually cover it. Otherwise implement the `Engine` trait for it and add a branch
-to `pick_kind` / `detect` in `engine.rs`. Run `work doctor` against it and
-confirm the isolation invariants still hold.
+If a runtime exposes a Docker-compatible CLI, the adapter can usually cover it,
+but selection must still identify the actual runtime and its daemon. Otherwise
+implement the `Engine` trait for it and add platform-aware selection. Run
+`work doctor` and the ignored integration suite against it; confirm the
+isolation invariants, rootless behavior where applicable, image operations,
+interactive attach, and cleanup all hold.
 
 ## Commit messages
 

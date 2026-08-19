@@ -1,8 +1,9 @@
 # `work`
 
-**Isolated multi-context session manager for developers.** Run multiple fully
+**Isolated, multiplatform session manager for developers.** Run multiple fully
 isolated coding contexts — one persistent Linux container per workspace — on a
-single machine, with a structural guarantee against cross-context data breach.
+single Linux, macOS, or Windows + WSL2 machine, with a structural guarantee
+against cross-context data breach.
 
 `work` gives each context its own container, named volume (mounted at
 `/home/dev`), and dedicated bridge network. Code, AI agents, and credentials in
@@ -19,11 +20,40 @@ terminal: attach to a persistent in-container session.
 
 ## Requirements
 
-- A container engine: **OrbStack** (recommended on macOS), **Docker**, **Podman**,
-  or **Colima**. `work` auto-detects in that order.
-- The in-container `herdr` multiplexer (and `zsh`/`bash`) ships inside the base
-  image.
-- macOS today; Linux shares the same codebase.
+`work` creates Linux containers through a Docker-compatible or Podman CLI. The
+host-platform contract is:
+
+| Host | Supported engine path |
+|---|---|
+| Linux | **Podman is preferred**, rootless where practical. Docker is the compatible fallback. |
+| macOS | **Podman** through Podman machine or Podman Desktop is supported. Docker, OrbStack, and Colima remain compatible alternatives; OrbStack is not the default. |
+| Windows | **WSL2 only**. Install and run `work` inside a WSL2 Linux distribution, with Podman available inside that distribution. Native Windows containers and native Windows backends are out of scope. |
+
+The in-container `herdr` multiplexer (and `zsh`/`bash`) ships inside the base
+image. `work` does not install or authenticate your development tools.
+
+### Engine selection
+
+Automatic selection is platform-aware: prefer Podman on Linux and in WSL2;
+prefer Podman on macOS when it is available; then use a Docker-compatible
+fallback. OrbStack and Colima are compatibility choices on macOS, not the
+portable default. A runtime must be installed and its backend must be running
+before `work new` can create a workspace; `work doctor` reports that state.
+
+`WORK_ENGINE` overrides automatic selection for one command or a shell session:
+
+```bash
+WORK_ENGINE=podman work doctor
+WORK_ENGINE=podman work new acme
+WORK_ENGINE=docker work doctor
+```
+
+Recognized values are `podman`, `docker`, `orbstack`, and `colima`; the latter
+two are macOS compatibility selections and use their Docker-compatible CLI.
+Use an override only when that engine is installed and running. An invalid or
+unavailable override fails instead of silently selecting a different engine.
+The compatibility contract is recorded in
+[`docs/superpowers/specs/2026-08-17-multiplatform-portability-design.md`](docs/superpowers/specs/2026-08-17-multiplatform-portability-design.md).
 
 ## Install
 
@@ -35,7 +65,12 @@ brew install 0xlucascoelho/tap/work
 
 Upgrade with `brew upgrade work`.
 
-**One-line script (macOS + Linux):**
+Homebrew also works on Linux. On Windows, install the binary from inside your
+WSL2 distribution (for example with the install script or `cargo install`),
+then run every `work` command from that WSL2 shell. Do not install or invoke
+`work` from PowerShell or Command Prompt.
+
+**One-line script (macOS + Linux, or from inside WSL2):**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/0xlucascoelho/work-cli/main/install.sh | sh
@@ -114,6 +149,7 @@ npm i -g @anthropic-ai/claude-code && claude   # example
 work ls                 # WORKSPACE  STATE    SESSION
                         # acme       running  live
 work stop acme          # stop the container (ends its session; files persist)
+work stop --all         # stop every workspace
 work start acme         # start again
 work rm acme            # remove container+net+config, KEEP the volume
 work rm acme --purge    # also delete the volume (irreversible; needs --yes)
@@ -139,8 +175,12 @@ volume persist) or `work rm`.
 
 ## Familiarity (optional)
 
-`work` detects your host shell (`$SHELL`, clamped to `zsh`/`bash`) and uses it
-inside the container. You can optionally seed a verbatim copy of your own config:
+`work new` uses the built-in `developer` profile by default: your workspace
+starts with Zsh, the bundled developer/editor config, Fish as an option, and
+sudo available to the non-root `dev` user. In an interactive terminal it asks
+whether to import the detected host shell config; answering no keeps the
+workspace on the bundled, portable template. `$SHELL` imports recognize Zsh,
+Bash, and Fish. You can also make the choice explicit:
 
 ```bash
 work new acme --import-shell-config            # copies ~/.zshrc (or ~/.bashrc)
@@ -148,7 +188,9 @@ work new acme --import-shell-config ~/my.zshrc # copies that file -> /home/dev/.
 work new acme --import-herdr-config           # copies a herdr config.toml into the workspace
 work new acme --import-starship-config          # copies ~/.config/starship.toml -> /home/dev/.config/starship.toml
 work new acme --import-dotfiles ~/dotfiles        # recursively copies that dir -> /home/dev
-work new acme --default                        # seed the repo's bundled templates/ dotfiles
+work new acme --profile developer --shell zsh  # explicit equivalent of the default
+work new acme --shell fish                    # use Fish in the developer profile
+work new acme --default                        # force the bundled templates explicitly
 ```
 
 `work` prints a warning when it copies a config — **make sure it is secret-free**,
@@ -157,13 +199,13 @@ since it now lives in that workspace's volume. You can set a global default in
 reference host paths that don't exist in the container; the copy is verbatim and
 best-effort.
 
-`--import-dotfiles <dir>` copies an entire directory tree (e.g. your `.zshrc`,
-`.config/nvim`, `.config/atuin`) into `/home/dev` in one shot — useful for configs
-that aren't single files. `--default` does the same with the **bundled
-`templates/` dotfiles** (embedded in the binary at build) plus the configured
-`default_image`, so `work new <ws> --default` reproduces the author's full
-setup. Both also read a global default (`import_dotfiles = "…"`). The same secret-free
-warning applies; explicit `--import-*` flags override individual files from a dotfiles seed.
+`--import-dotfiles <dir>` copies an allowlisted directory tree (e.g. your
+`.zshrc`, `.config/nvim`, `.config/atuin`) into `/home/dev` in one shot — useful
+for configs that aren't single files. Symlinks and unlisted entries are refused.
+`--default` does the same with the **bundled `templates/` dotfiles** (embedded
+in the binary at build). The same secret-free warning applies; explicit
+`--import-*` flags override individual files from a dotfiles seed and the
+selected sources are remembered for later bare `work update` calls.
 
 ## Updating configs in place (`work update`)
 
@@ -207,7 +249,9 @@ isolated environment:
 
 If you import a shell config that runs [Starship](https://starship.rs), its
 `container` module renders a fixed `[Docker]` label — it is Starship detecting
-`/.dockerenv`, not `work` or OrbStack, and `work` won't edit your prompt config.
+`/.dockerenv`, not `work` or the host engine, and `work` won't edit your prompt
+config. The label does not mean that Docker, rather than Podman, is running on
+the host.
 Two opt-ins in `~/.config/starship.toml`:
 
 ```toml
@@ -263,9 +307,9 @@ read sibling directories. `work` enforces isolation at the OS container boundary
 violated (e.g. a container that somehow shares a network, mounts a foreign
 volume, runs as root, or publishes a host port).
 
-For the full setup walkthrough — the exact `docker run` that builds the wall,
-the resource naming scheme, the threat model, and how to verify each invariant —
-see [`docs/SETUP_AND_ISOLATION.md`](docs/SETUP_AND_ISOLATION.md).
+For the full setup walkthrough — the runtime-neutral isolation contract, the
+resource naming scheme, the threat model, and how to verify each invariant — see
+[`docs/SETUP_AND_ISOLATION.md`](docs/SETUP_AND_ISOLATION.md).
 
 ## Logging into tools that need a browser (OAuth)
 
@@ -282,9 +326,11 @@ work browse acme
 
 It installs an `xdg-open` shim in the workspace (and sets `$BROWSER`) that
 sends each `http(s)` URL to a FIFO in the volume; `work browse` reads it and
-opens each URL via `open` (macOS) / `xdg-open` (Linux). Override the host
-opener with `WORK_HOST_BROWSER=<bin>`. Existing workspaces get the shim on
-first `work browse` — no image rebuild.
+opens each URL via the host opener. On macOS this is normally `open`; on Linux
+it is normally `xdg-open`; WSL2 prefers `wslview` when available and otherwise
+uses `xdg-open`. Override it with `WORK_HOST_BROWSER=<bin>` if your WSL2 distro
+needs a different host-browser bridge.
+Existing workspaces get the shim on first `work browse` — no image rebuild.
 
 For logins that call back to `localhost:<port>` (most OAuth), `work browse`
 also **auto-bridges that port** from the host into the workspace — so a login
@@ -302,11 +348,11 @@ work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 
 | Command | Effect |
 |---|---|
-| `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-herdr-config [<path>]`, `--import-starship-config [<path>]`, `--import-dotfiles <dir>`, `--default`. |
+| `work new <ws>` | Create an isolated workspace (volume + network + container). Defaults to the `developer` profile/Zsh. Flags: `--profile`, `--shell`, `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-herdr-config [<path>]`, `--import-starship-config [<path>]`, `--import-dotfiles <dir>`, `--default`. |
 | `work <ws>` | Attach to the in-container herdr server (launches it on first run). `Ctrl-b q` detaches. |
 | `work ls` | List workspaces with state and session liveness (`live`/`—`). |
 | `work start <ws>` / `work stop <ws>` | Lifecycle. `stop` ends the session (warns if one is live). |
-| `work stop-all` | Stop every workspace. |
+| `work stop --all` / `work stop-all` | Stop every workspace. |
 | `work rm <ws>` | Remove container + network + config, **keep** the volume. |
 | `work rm <ws> --purge` | Also delete the volume (irreversible). Needs `--yes`. |
 | `work fwd <ws> <port>` | (opt-in) forward a host port into a workspace for your own logins. |
@@ -329,6 +375,41 @@ only when a live session would be ended. `--yes`/`-y` skips all prompts.
 If the dashboard ever leaves your terminal in a broken state (e.g. a forced
 kill mid-session), run `stty sane` (or `reset`) to restore line discipline
 and echo.
+
+### Engine and platform checks
+
+Start the backend before running `work new`:
+
+```bash
+# Linux or WSL2 with Podman
+podman info
+
+# macOS with Podman machine
+podman machine list
+podman machine start       # only if the machine is stopped
+podman info
+
+# Docker-compatible fallback
+docker info
+```
+
+On macOS, initialize a Podman machine once if none exists:
+`podman machine init` followed by `podman machine start`. Podman Desktop can
+manage the same machine. On Linux, prefer a rootless Podman installation and
+run `podman info` as the user who will run `work`; do not use `sudo work` unless
+you intentionally want a separate root-owned engine state.
+
+On Windows, check WSL2 from Windows with `wsl --status` and `wsl -l -v`, then
+open the target distribution and run `podman info`, `work doctor`, and all other
+commands there. A Podman or Docker installation visible only to Windows is not
+a supported backend for `work`.
+
+If `work doctor` passes but a real workspace operation fails, collect the
+selected engine's diagnostic output and retry with `WORK_ENGINE=podman` or
+`WORK_ENGINE=docker` when those engines are available. Unit tests and a static
+`work doctor` run do not replace a real integration test against the engine;
+contributors should run the ignored integration suite as described in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Configuration
 

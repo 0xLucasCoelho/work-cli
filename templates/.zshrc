@@ -1,4 +1,5 @@
 # zinit
+if [[ -r "${HOME}/.local/share/zinit/zinit.git/zinit.zsh" ]]; then
 source "${HOME}/.local/share/zinit/zinit.git/zinit.zsh"
 
 # zinit annexes — pinned to specific commits (same threat model as the plugins
@@ -26,17 +27,18 @@ zinit light zdharma-continuum/fast-syntax-highlighting
 
 # ensure compinit ran (zinit usually handles this, but be explicit)
 autoload -Uz compinit && compinit
+fi
 
 # tools — order matters: prompt → history → navigation
-eval "$(starship init zsh)"
-eval "$(atuin init zsh)"
-eval "$(zoxide init zsh --cmd cd)"
+command -v starship >/dev/null 2>&1 && eval "$(starship init zsh)"
+command -v atuin >/dev/null 2>&1 && eval "$(atuin init zsh)"
+command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init zsh --cmd cd)"
 
-alias ls='eza -lah --git --icons'
-alias z='zed'
+command -v eza >/dev/null 2>&1 && alias ls='eza -lah --git --icons'
+command -v zed >/dev/null 2>&1 && alias z='zed'
 
 export PATH="$HOME/.local/bin:$PATH"
 export NVM_DIR="$HOME/.nvm"
-[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"  # This loads nvm
-[ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"  # This loads nvm bash_completion
-eval "$(mise activate zsh)"
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate zsh)"
+fi

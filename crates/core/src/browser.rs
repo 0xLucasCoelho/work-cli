@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use url::{Host, Url};
 
+use crate::config::{BrowserConfirmation, BrowserProfile};
 use crate::engine::Engine;
 
 /// Where the FIFO lives (in the workspace volume, so it persists across
@@ -53,12 +54,51 @@ pub fn host_opener_for(os: &str) -> &'static str {
 }
 
 /// Effective host browser opener: `$WORK_HOST_BROWSER` wins if set, else the
-/// OS default. The override is used verbatim — the caller owns it.
+/// OS default. WSL prefers `wslview` when it is installed so a browser URL
+/// opened from the Linux process reaches the Windows host. The override is
+/// used verbatim — the caller owns it.
 pub fn host_opener() -> String {
     if let Some(b) = std::env::var_os("WORK_HOST_BROWSER") {
         return b.to_string_lossy().into_owned();
     }
+    if is_wsl() && command_available("wslview") {
+        return "wslview".into();
+    }
     host_opener_for(std::env::consts::OS).to_string()
+}
+
+/// True when this Linux process is running inside Windows Subsystem for Linux.
+/// WSL exports both variables for normal interactive distributions; accepting
+/// either keeps this helper useful in CI and minimal WSL environments.
+pub fn is_wsl() -> bool {
+    is_wsl_environment(
+        std::env::consts::OS,
+        std::env::var_os("WSL_INTEROP").as_deref(),
+        std::env::var_os("WSL_DISTRO_NAME").as_deref(),
+    )
+}
+
+/// Pure WSL environment predicate used by the host-opener selection.
+pub fn is_wsl_environment(
+    target_os: &str,
+    interop: Option<&std::ffi::OsStr>,
+    distro: Option<&std::ffi::OsStr>,
+) -> bool {
+    target_os == "linux"
+        && [interop, distro]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_empty())
+}
+
+fn command_available(binary: &str) -> bool {
+    Command::new(binary)
+        .arg("--help")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 /// True iff `s` is an `http(s)` URL — the only thing the bridge forwards. PURE.
@@ -101,16 +141,17 @@ const BROWSE_RATE_LIMIT: Duration = Duration::from_secs(2);
 pub struct BrowseGuard {
     confirmed: HashSet<String>,
     last_open: Option<Instant>,
-    yes_all: bool,
+    trusted: bool,
 }
 
 impl BrowseGuard {
-    /// `yes_all` skips the per-host prompt (set via `WORK_BROWSE_CONFIRM=no`).
-    pub fn new(yes_all: bool) -> Self {
+    /// Trusted mode skips the per-host prompt. It is deliberately an explicit
+    /// workspace preference; `prompt` remains the default.
+    pub fn new(confirmation: BrowserConfirmation) -> Self {
         Self {
             confirmed: HashSet::new(),
             last_open: None,
-            yes_all,
+            trusted: confirmation == BrowserConfirmation::Trusted,
         }
     }
 
@@ -127,7 +168,7 @@ impl BrowseGuard {
             .ok()
             .and_then(|u| u.host_str().map(str::to_string))
             .unwrap_or_default();
-        if !self.yes_all && !self.confirmed.contains(&host) {
+        if !self.trusted && !self.confirmed.contains(&host) {
             if host.is_empty() {
                 eprintln!("· no host in {url} — not opening");
                 return false;
@@ -150,12 +191,14 @@ impl BrowseGuard {
     }
 }
 
-/// Open `url` in the host browser. Unless `WORK_BROWSE_PROFILE=default` (the
-/// opt-out), try a throwaway Chrome guest profile on macOS so a forced
+/// Open `url` in the host browser. Unless the workspace selected `default`
+/// (or the process-local `WORK_BROWSE_PROFILE=default` override is set), try a
+/// throwaway Chrome guest profile on macOS so a forced
 /// navigation can't ride an authenticated profile; fall back to the default
 /// opener if Chrome isn't present. Returns an error string on failure.
-pub fn open_url(opener: &str, url: &str) -> Result<(), String> {
+pub fn open_url(opener: &str, url: &str, profile: BrowserProfile) -> Result<(), String> {
     if std::env::consts::OS == "macos"
+        && profile == BrowserProfile::Guest
         && std::env::var("WORK_BROWSE_PROFILE").ok().as_deref() != Some("default")
     {
         let status = Command::new("open")
@@ -228,6 +271,14 @@ mod tests {
         assert_eq!(host_opener_for("macos"), "open");
         assert_eq!(host_opener_for("linux"), "xdg-open");
         assert_eq!(host_opener_for("freebsd"), "xdg-open"); // unknown -> xdg-open
+    }
+
+    #[test]
+    fn wsl_environment_is_linux_only() {
+        let marker = std::ffi::OsStr::new("1");
+        assert!(is_wsl_environment("linux", Some(marker), None));
+        assert!(!is_wsl_environment("macos", Some(marker), None));
+        assert!(!is_wsl_environment("windows", None, Some(marker)));
     }
 
     #[test]

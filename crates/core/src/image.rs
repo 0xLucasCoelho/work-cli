@@ -6,16 +6,28 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use tempfile::TempDir;
 
-use crate::config::DEFAULT_IMAGE;
+use crate::config::{DEFAULT_IMAGE, DEVELOPER_IMAGE};
 use crate::engine::{build_image_at, Engine};
 
-/// Embedded default Dockerfile (matches the spec's base image).
+/// Embedded default Dockerfile/Containerfile (accepted by Docker-compatible
+/// engines, including Podman).
 pub const DEFAULT_DOCKERFILE: &str = include_str!("../../docker/work-base.Dockerfile");
 
 /// Build the default image `work-base:latest`.
 pub fn build_default(engine: &dyn Engine) -> Result<()> {
     build_image(engine, DEFAULT_IMAGE, DEFAULT_DOCKERFILE)
 }
+
+/// Build the developer bundle from the checked-in personal image definition.
+/// This keeps the profile useful on first attach: zsh, Fish, Neovim, sudo and
+/// the shell tools used by the bundled templates are all present together.
+pub fn build_developer(engine: &dyn Engine) -> Result<()> {
+    build_image(engine, DEVELOPER_IMAGE, PERSONAL_DOCKERFILE)
+}
+
+/// The developer image is deliberately a repository-owned, reviewable build
+/// definition rather than a host-derived Dockerfile.
+pub const PERSONAL_DOCKERFILE: &str = include_str!("../../../Dockerfile.personal");
 
 /// Build `tag` from `dockerfile_content` using a throwaway build context.
 pub fn build_image(engine: &dyn Engine, tag: &str, dockerfile_content: &str) -> Result<()> {
@@ -43,6 +55,8 @@ pub fn build(engine: &dyn Engine, tag: Option<&str>, dockerfile: Option<&Path>) 
         None => {
             if tag == DEFAULT_IMAGE {
                 build_default(engine)?;
+            } else if tag == DEVELOPER_IMAGE {
+                build_developer(engine)?;
             } else {
                 anyhow::bail!("building a custom tag '{tag}' requires --dockerfile <path>");
             }
@@ -131,7 +145,7 @@ mod tests {
     fn default_dockerfile_bakes_terminal_and_locale() {
         use super::DEFAULT_DOCKERFILE;
         // Terminfo (xterm-256color) + a UTF-8 locale + a sane default TERM
-        // must be baked in: `docker exec` does not propagate the host
+        // must be baked in: container `exec` does not propagate the host
         // environment, so without these TUI agents and the in-container
         // multiplexer (herdr) render escape codes as literal text.
         assert!(DEFAULT_DOCKERFILE.contains("ncurses-term"));

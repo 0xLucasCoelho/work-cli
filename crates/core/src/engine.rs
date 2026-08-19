@@ -1,7 +1,8 @@
 //! Container-engine abstraction. One trait, one CLI adapter.
 //!
-//! The `docker` CLI is the common substrate: OrbStack, Docker, and Colima all
-//! expose it; Podman is CLI-compatible (`podman` binary, identical verbs).
+//! Podman is preferred when available. Docker, OrbStack, and Colima remain
+//! supported through their Docker-compatible CLI; Podman uses the same verbs
+//! through its `podman` binary.
 
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -49,7 +50,7 @@ pub enum ContainerState {
     Missing,
 }
 
-/// Container hardening applied to every workspace (and forwarder) `docker run`.
+/// Container hardening applied to every workspace (and forwarder) `run`.
 ///
 /// Workspace hardening: a pids limit + the managed label always ship, appended
 /// additively in `Engine::run`. cap-drop ALL / no-new-privileges are deliberately
@@ -89,7 +90,7 @@ impl Default for HardenOpts {
     }
 }
 
-/// `docker run` options for a workspace container.
+/// `run` options for a workspace container.
 pub struct RunOpts {
     pub name: String,
     pub image: String,
@@ -129,11 +130,11 @@ pub trait Engine: Send + Sync {
     /// Interactive exec — inherits the calling process's stdio/tty. `shell` is
     /// the resolved shell basename; injected as `$SHELL` so herdr spawns the
     /// correct pane shell — and so containers created before this env was set
-    /// at `docker run` time still heal on attach.
+    /// at container creation time still heal on attach.
     fn exec_interactive(&self, name: &str, cmd: &[&str], shell: &str) -> Result<()>;
     /// Non-interactive exec — captures stdout.
     fn exec_capture(&self, name: &str, cmd: &[&str]) -> Result<String>;
-    /// `docker exec --user root <name> <cmd...>` (non-interactive), require
+    /// `exec --user root <name> <cmd...>` (non-interactive), require
     /// success. For one-off system setup touching root-owned paths the `dev`
     /// user can't write (e.g. installing the shim under `/usr/local/bin`).
     /// Workspace containers are not cap-dropped, so this runs as full root.
@@ -158,20 +159,20 @@ pub trait Engine: Send + Sync {
     fn container_networks(&self, name: &str) -> Result<BTreeSet<String>>;
     /// Inspect a container's mounts -> list of (source_name_or_path, destination).
     fn container_mounts(&self, name: &str) -> Result<Vec<(String, String)>>;
-    /// Generic `docker inspect --format` for a container (docker Go-template).
+    /// Generic container `inspect --format` (Go template).
     /// Used by `doctor` for restart-policy / user / image / port checks.
     fn inspect_format(&self, name: &str, format: &str) -> Result<String>;
-    /// Stable identity of the active daemon (`docker info --format {{.ID}}`),
+    /// Stable identity of the active daemon or Podman store,
     /// so a workspace created on one daemon refuses to talk to another.
     fn daemon_id(&self) -> Result<String>;
     /// True iff object `name` of `kind` (`"volume"`/`"network"`/`"container"`)
     /// carries label `key` — used to refuse reusing a same-named object we
     /// didn't create.
     fn object_has_label(&self, name: &str, kind: &str, key: &str) -> Result<bool>;
-    /// Resolved image ID (`docker image inspect --format {{.Id}} <image>`),
+    /// Resolved image ID (`image inspect --format {{.Id}} <image>`),
     /// recorded at create/recreate so `doctor` can flag a drifted image.
     fn image_id(&self, image: &str) -> Result<String>;
-    /// All container names on the daemon (`docker ps -a --format {{.Names}}`),
+    /// All container names on the daemon (`ps -a --format {{.Names}}`),
     /// so `doctor` can surface forwarder containers / orphans.
     fn list_containers(&self) -> Result<Vec<String>>;
 
@@ -203,21 +204,118 @@ pub trait Engine: Send + Sync {
     ) -> Result<()>;
 }
 
-// ---------- PURE selection ----------
+// ---------- PURE selection and platform helpers ----------
 
-/// Given which runtimes are present, pick per the locked order.
+const SUPPORTED_ENGINE_NAMES: &str = "podman, docker, orbstack, colima";
+const WINDOWS_WSL_ONLY: &str =
+    "Windows support is WSL-only; run work from inside a WSL distribution.";
+
+/// Parse an optional `WORK_ENGINE` value.
+///
+/// An unset or blank value means automatic detection. Non-blank values are
+/// intentionally limited to the four engine names understood by `detect()` so
+/// a typo cannot silently change the selected runtime.
+pub fn parse_engine_override(value: Option<&str>) -> Result<Option<EngineKind>> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let value = raw.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+
+    let kind = match value.to_ascii_lowercase().as_str() {
+        "podman" => EngineKind::Podman,
+        "docker" => EngineKind::Docker,
+        "orbstack" => EngineKind::OrbStack,
+        "colima" => EngineKind::Colima,
+        _ => bail!("invalid WORK_ENGINE value '{raw}'; expected one of: {SUPPORTED_ENGINE_NAMES}"),
+    };
+    Ok(Some(kind))
+}
+
+/// Return the Windows support explanation for a target OS, if applicable.
+///
+/// WSL processes target Linux, so native Windows is the only target rejected
+/// here. Keeping this helper pure makes the policy testable without changing
+/// the process environment or compiling the crate for Windows.
+pub fn unsupported_platform_message(target_os: &str) -> Option<&'static str> {
+    (target_os == "windows").then_some(WINDOWS_WSL_ONLY)
+}
+
+/// Detect WSL from the Linux kernel strings exposed by `/proc`.
+pub fn is_wsl_kernel(os_release: &str, proc_version: &str) -> bool {
+    let release = os_release.to_ascii_lowercase();
+    let version = proc_version.to_ascii_lowercase();
+    release.contains("microsoft")
+        || release.contains("wsl")
+        || version.contains("microsoft")
+        || version.contains("wsl")
+}
+
+fn host_is_wsl() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+        let version = std::fs::read_to_string("/proc/version").unwrap_or_default();
+        is_wsl_kernel(&release, &version)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// Given which runtimes are available, pick the platform-neutral order.
+///
+/// Podman is preferred, followed by Docker-compatible OrbStack and Colima,
+/// then the generic Docker CLI.
 pub fn pick_kind(orb: bool, docker: bool, podman: bool, colima: bool) -> Option<EngineKind> {
-    if orb {
-        Some(EngineKind::OrbStack)
-    } else if docker {
-        Some(EngineKind::Docker)
-    } else if podman {
+    if podman {
         Some(EngineKind::Podman)
+    } else if orb {
+        Some(EngineKind::OrbStack)
     } else if colima {
         Some(EngineKind::Colima)
+    } else if docker {
+        Some(EngineKind::Docker)
     } else {
         None
     }
+}
+
+fn kind_available(kind: EngineKind, orb: bool, docker: bool, podman: bool, colima: bool) -> bool {
+    match kind {
+        EngineKind::OrbStack => orb,
+        EngineKind::Docker => docker,
+        EngineKind::Podman => podman,
+        EngineKind::Colima => colima,
+    }
+}
+
+/// Apply an explicit override when present, otherwise use automatic selection.
+pub fn select_kind(
+    override_kind: Option<EngineKind>,
+    orb: bool,
+    docker: bool,
+    podman: bool,
+    colima: bool,
+) -> Result<EngineKind> {
+    if let Some(kind) = override_kind {
+        if !kind_available(kind, orb, docker, podman, colima) {
+            bail!(
+                "WORK_ENGINE={} requested, but that engine is not available; install it or unset WORK_ENGINE",
+                kind.as_str()
+            );
+        }
+        return Ok(kind);
+    }
+
+    pick_kind(orb, docker, podman, colima).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no supported container engine found. Install one of: {SUPPORTED_ENGINE_NAMES}."
+        )
+    })
 }
 
 fn which(bin: &str) -> bool {
@@ -239,15 +337,32 @@ fn orbstack_present() -> bool {
 }
 
 pub fn detect() -> Result<Box<dyn Engine>> {
-    let orb = orbstack_present();
-    let docker = which("docker");
-    let podman = which("podman");
-    let colima = which("colima");
+    if let Some(message) = unsupported_platform_message(std::env::consts::OS) {
+        bail!(message);
+    }
 
-    let kind = pick_kind(orb, docker, podman, colima).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no supported container engine found. Install OrbStack, Docker, Podman, or Colima."
-        )
+    let override_value = match std::env::var("WORK_ENGINE") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("WORK_ENGINE must be valid UTF-8; expected one of: {SUPPORTED_ENGINE_NAMES}")
+        }
+    };
+    let override_kind = parse_engine_override(override_value.as_deref())?;
+
+    let docker = which("docker");
+    // OrbStack and Colima both drive the Docker CLI; the app/runtime marker
+    // alone is not enough if the compatible CLI is missing from PATH.
+    let orb = docker && orbstack_present();
+    let podman = which("podman");
+    let colima = docker && which("colima");
+
+    let kind = select_kind(override_kind, orb, docker, podman, colima).map_err(|error| {
+        if host_is_wsl() {
+            error.context("WSL detected; install a supported engine inside this WSL distribution")
+        } else {
+            error
+        }
     })?;
 
     // OrbStack/Colima both drive the `docker` binary; Podman uses `podman`.
@@ -261,8 +376,12 @@ pub fn detect() -> Result<Box<dyn Engine>> {
     }))
 }
 
-// ---------- DockerCli adapter ----------
+// ---------- CLI adapter ----------
 
+/// CLI adapter for Docker-compatible engines and Podman.
+///
+/// The `DockerCli` name is retained to keep the existing public surface stable;
+/// its binary is selected at construction time.
 pub struct DockerCli {
     kind: EngineKind,
     binary: String,
@@ -293,7 +412,7 @@ impl DockerCli {
     }
 
     fn run_success(&self, args: &[&str]) -> Result<()> {
-        // Capture stderr (not just the status) so a failing docker verb reports
+        // Capture stderr (not just the status) so a failing CLI verb reports
         // its cause — e.g. a "no such container" would otherwise surface as a
         // bare "failed (exit 1)" with nothing to act on.
         let out = self
@@ -375,7 +494,7 @@ impl Engine for DockerCli {
     }
 
     fn container_state(&self, name: &str) -> Result<ContainerState> {
-        // `docker inspect` exits non-zero when the container is absent — that is
+        // `inspect` exits non-zero when the container is absent — that is
         // `Missing`. A *different* failure (daemon down, auth, malformed name)
         // must NOT collapse into `Missing`, or `has_live_session`/`doctor`/
         // `ensure_running` would treat a down daemon as "no container" and fail
@@ -457,7 +576,7 @@ impl Engine for DockerCli {
             c.arg(arg);
         }
         // Capture output so the container ID doesn't leak, and so we can report
-        // docker's stderr if creation fails.
+        // the CLI's stderr if creation fails.
         let out = c
             .output()
             .with_context(|| format!("running container {}", opts.name))?;
@@ -486,7 +605,7 @@ impl Engine for DockerCli {
         c.arg("exec");
         // Forward terminal capabilities into the exec so TUI apps inside the
         // container (Claude Code, omp, …) detect the host's real color depth
-        // and render Nerd Font glyphs. `docker exec` does not propagate the
+        // and render Nerd Font glyphs. `exec` does not propagate the
         // host environment: without COLORTERM apps degrade below truecolor,
         // and without NERD_FONTS=1 agents like omp fall back to ASCII glyphs
         // because the in-container multiplexer hides the host terminal from them.
@@ -500,7 +619,7 @@ impl Engine for DockerCli {
         }
         // `$SHELL` selects herdr's pane shell (its config: "empty means $SHELL,
         // then /bin/sh"). Inject it on the exec so workspaces created before
-        // this env was set at `docker run` time still spawn the right shell —
+        // this env was set at container creation time still spawn the right shell —
         // mirrors the NERD_FONTS injection above.
         c.arg("-e")
             .arg(format!("SHELL={}", crate::config::shell_path(shell)));
@@ -559,7 +678,7 @@ impl Engine for DockerCli {
     fn seed_file(&self, name: &str, src: &Path, dest: &str) -> Result<()> {
         // Install `src` at `dest` AS THE DEV USER by streaming its bytes through
         // `tee`, so the file is born dev-owned — no separate `chown` step needed
-        // (`docker cp` would preserve the host uid and force a follow-up chown).
+        // (`cp` would preserve the host uid and force a follow-up chown).
         // `tee` writes 0666 & ~umask
         // (0644 under the image's 022) — correct for the config files this seeds;
         // it carries no exec bit, but none of these seeds needs one.
@@ -590,7 +709,7 @@ impl Engine for DockerCli {
     fn seed_dir(&self, name: &str, src_dir: &Path, dest_dir: &str) -> Result<()> {
         // Stream a tarball of `src_dir`'s contents into the container and extract
         // AS THE DEV USER, so every file is born dev-owned with its mode preserved
-        // — no separate `chown` step. (`docker cp` would preserve the host uid for
+        // — no separate `chown` step. (`cp` would preserve the host uid for
         // the whole tree, forcing a follow-up chown.) `--no-same-owner` skips GNU
         // tar's (impossible as non-root)
         // ownership step cleanly; COPYFILE_DISABLE keeps macOS bsdtar from
@@ -637,7 +756,7 @@ impl Engine for DockerCli {
                 String::from_utf8_lossy(&out.stderr).trim(),
             );
         }
-        // tar can only fail downstream (SIGPIPE, exit 141) if docker closed its
+        // tar can only fail downstream (SIGPIPE, exit 141) if the CLI closed its
         // stdin early — the real cause is reported above — so flag only a
         // self-contained tar failure.
         if let Some(ts) = tar_status {
@@ -713,6 +832,19 @@ impl Engine for DockerCli {
         self.run_capture(&["inspect", "--type", "container", "--format", format, name])
     }
     fn daemon_id(&self) -> Result<String> {
+        if self.kind == EngineKind::Podman {
+            // Podman has no Docker-compatible top-level `.ID` in `info`.
+            // These host/store paths identify the active local or remote
+            // Podman context while staying within the CLI interface.
+            let id = self.run_capture(&[
+                "info",
+                "--format",
+                "{{.Host.RemoteSocket.Path}}|{{.Store.GraphRoot}}|{{.Store.RunRoot}}",
+            ])?;
+            if !id.is_empty() && !id.split('|').any(|part| part == "<no value>") {
+                return Ok(format!("podman:{id}"));
+            }
+        }
         self.run_capture(&["info", "--format", "{{.ID}}"])
     }
     fn object_has_label(&self, name: &str, kind: &str, key: &str) -> Result<bool> {
@@ -758,7 +890,7 @@ impl Engine for DockerCli {
         let connect = format!("TCP:{target}:{target_port}");
         let label = managed_label();
         // Foreground + attached: this call BLOCKS until the user interrupts.
-        // Ctrl-C is delivered to the whole process group; `docker run` catches
+        // Ctrl-C is delivered to the whole process group; the CLI `run` catches
         // it, stops the container, and `--rm` removes it — cleanup is robust
         // even if this process is killed before returning. Hardened: cap-drop
         // ALL + no-new-privileges + managed label + a digest-pinned image, so a
@@ -864,7 +996,7 @@ pub fn build_image_at(
 }
 
 /// Host terminal env forwarded into a workspace `exec` so in-container TUI apps
-/// (Claude Code, omp, …) detect the host's real color depth. `docker exec`
+/// (Claude Code, omp, …) detect the host's real color depth. `exec`
 /// does not propagate the host environment, and `COLORTERM` is the de-facto
 /// signal apps check for truecolor — without it they degrade below what the
 /// terminal can render. (TERM/TERM_PROGRAM are set by the multiplexer itself, not us.)
@@ -872,7 +1004,7 @@ const TERMINAL_ENV_TO_FORWARD: &[&str] = &["COLORTERM"];
 /// Env vars to unconditionally inject into every workspace `exec` (not copied
 /// from the host). `NERD_FONTS=1` forces Nerd Font glyph rendering in agents
 /// like omp, whose auto-detection fails inside the in-container multiplexer.
-/// Belt-and-suspenders: the same value is baked at `docker run` time (see
+/// Belt-and-suspenders: the same value is baked at container creation time (see
 /// `workspace::run_opts`), but forwarding it on every `exec` also covers
 /// containers created before that fix landed.
 const TERMINAL_ENV_HARDCODED: &[(&str, &str)] = &[("NERD_FONTS", "1")];

@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use work_core::doctor::{analyze_cross_volume, analyze_isolation, IsolationProbe};
+use work_core::doctor::{
+    all_ok, analyze_cross_volume, analyze_isolation, CheckSeverity, IsolationProbe,
+};
 
 #[test]
 fn clean_workspace_passes() {
@@ -107,13 +109,11 @@ fn hardening_flags_wrong_restart_policy() {
         "work-base:latest",
         "{}",
     );
-    assert!(
-        !analyze_hardening(&p)
-            .iter()
-            .find(|r| r.label == "acme:restart")
-            .unwrap()
-            .ok
-    );
+    let results = analyze_hardening(&p);
+    let restart = results.iter().find(|r| r.label == "acme:restart").unwrap();
+    assert!(!restart.ok);
+    assert_eq!(restart.severity, CheckSeverity::Warning);
+    assert!(all_ok(&results));
 }
 
 #[test]
@@ -126,13 +126,11 @@ fn hardening_flags_root_user() {
         "work-base:latest",
         "{}",
     );
-    assert!(
-        !analyze_hardening(&p)
-            .iter()
-            .find(|r| r.label == "acme:user")
-            .unwrap()
-            .ok
-    );
+    let results = analyze_hardening(&p);
+    let user = results.iter().find(|r| r.label == "acme:user").unwrap();
+    assert!(!user.ok);
+    assert_eq!(user.severity, CheckSeverity::Blocking);
+    assert!(!all_ok(&results));
 }
 
 #[test]
@@ -145,8 +143,25 @@ fn hardening_flags_image_mismatch() {
         "work-base:latest",
         "{}",
     );
+    let results = analyze_hardening(&p);
+    let image = results.iter().find(|r| r.label == "acme:image").unwrap();
+    assert!(!image.ok);
+    assert_eq!(image.severity, CheckSeverity::Warning);
+    assert!(all_ok(&results));
+}
+
+#[test]
+fn hardening_accepts_podman_localhost_image_prefix() {
+    let p = hp(
+        "acme",
+        "unless-stopped",
+        "dev",
+        "localhost/work-base:latest",
+        "work-base:latest",
+        "{}",
+    );
     assert!(
-        !analyze_hardening(&p)
+        analyze_hardening(&p)
             .iter()
             .find(|r| r.label == "acme:image")
             .unwrap()
@@ -165,13 +180,11 @@ fn hardening_flags_published_ports() {
         "work-base:latest",
         ports,
     );
-    assert!(
-        !analyze_hardening(&p)
-            .iter()
-            .find(|r| r.label == "acme:ports")
-            .unwrap()
-            .ok
-    );
+    let results = analyze_hardening(&p);
+    let ports = results.iter().find(|r| r.label == "acme:ports").unwrap();
+    assert!(!ports.ok);
+    assert_eq!(ports.severity, CheckSeverity::Blocking);
+    assert!(!all_ok(&results));
 }
 
 #[test]
@@ -185,13 +198,11 @@ fn hardening_flags_unmanaged_container() {
         "{}",
     );
     p.managed_label = false;
-    assert!(
-        !analyze_hardening(&p)
-            .iter()
-            .find(|r| r.label == "acme:managed")
-            .unwrap()
-            .ok
-    );
+    let results = analyze_hardening(&p);
+    let managed = results.iter().find(|r| r.label == "acme:managed").unwrap();
+    assert!(!managed.ok);
+    assert_eq!(managed.severity, CheckSeverity::Warning);
+    assert!(all_ok(&results));
 }
 
 #[test]
@@ -206,13 +217,14 @@ fn hardening_flags_image_digest_drift() {
     );
     p.running_image_id = Some("sha256:aaaa".into());
     p.resolved_image_id = Some("sha256:bbbb".into());
-    assert!(
-        !analyze_hardening(&p)
-            .iter()
-            .find(|r| r.label == "acme:image-drift")
-            .unwrap()
-            .ok
-    );
+    let results = analyze_hardening(&p);
+    let drift = results
+        .iter()
+        .find(|r| r.label == "acme:image-drift")
+        .unwrap();
+    assert!(!drift.ok);
+    assert_eq!(drift.severity, CheckSeverity::Warning);
+    assert!(all_ok(&results));
 }
 
 #[test]

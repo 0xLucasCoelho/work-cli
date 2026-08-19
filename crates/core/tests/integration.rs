@@ -5,7 +5,7 @@
 //!
 //! Requires a running engine (OrbStack / Docker / Podman / Colima).
 
-use std::process::Command;
+use std::{ffi::OsString, process::Command};
 
 use work_core::{
     config, doctor,
@@ -17,6 +17,41 @@ use work_core::{
 /// Unique-ish workspace name so parallel runs don't collide.
 fn it_name() -> String {
     format!("it-{}", std::process::id())
+}
+
+/// Keep this test from inspecting or modifying the user's real workspace
+/// catalog, and guarantee engine/config cleanup if an assertion panics.
+struct TestScope {
+    name: String,
+    previous_config_home: Option<OsString>,
+    config_home: tempfile::TempDir,
+}
+
+impl TestScope {
+    fn new(name: String) -> Self {
+        let config_home = tempfile::tempdir().expect("create isolated config directory");
+        let previous_config_home = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", config_home.path());
+        cleanup(&name);
+        Self {
+            name,
+            previous_config_home,
+            config_home,
+        }
+    }
+}
+
+impl Drop for TestScope {
+    fn drop(&mut self) {
+        cleanup(&self.name);
+        match self.previous_config_home.take() {
+            Some(path) => std::env::set_var("XDG_CONFIG_HOME", path),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        // Keep the temporary directory alive until after cleanup has restored
+        // the environment; its Drop then removes the isolated config tree.
+        let _ = &self.config_home;
+    }
 }
 
 /// Remove a workspace's docker resources + config (work v1 has no `rm` command).
@@ -38,7 +73,7 @@ fn cleanup(name: &str) {
 #[ignore]
 fn workspace_create_shell_ready_doctor_then_stop() {
     let name = it_name();
-    cleanup(&name); // defensive: start clean
+    let _scope = TestScope::new(name.clone());
 
     // Create the workspace (auto-builds the default base image if needed).
     let ws = Workspace::create(
@@ -84,6 +119,4 @@ fn workspace_create_shell_ready_doctor_then_stop() {
         engine.container_state(&ctr).unwrap(),
         ContainerState::Running
     );
-
-    cleanup(&name);
 }

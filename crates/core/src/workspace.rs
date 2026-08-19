@@ -25,6 +25,68 @@ pub struct WorkspaceStatus {
     pub session_live: bool,
 }
 
+/// The active daemon's view of the three resources that constitute a
+/// workspace. This deliberately contains only facts needed to decide whether
+/// changing a workspace's recorded daemon can be safe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DaemonRecoveryResources {
+    pub container_exists: bool,
+    pub volume_exists: bool,
+    pub network_exists: bool,
+    pub container_managed: bool,
+    pub volume_managed: bool,
+    pub network_managed: bool,
+    pub container_isolated: bool,
+}
+
+/// A daemon mismatch recovery is safe only when this daemon already contains
+/// the complete, work-managed, isolated workspace. Partial or foreign
+/// resources are never adopted automatically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonRecoveryState {
+    Empty,
+    CompleteManagedIsolated,
+    Conflict,
+}
+
+impl DaemonRecoveryState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::CompleteManagedIsolated => "complete-managed-isolated",
+            Self::Conflict => "conflict",
+        }
+    }
+}
+
+/// Pure recovery policy. It is intentionally conservative: a partial set of
+/// resources, an unmanaged object, or a container outside its expected
+/// topology is a conflict rather than a cue to create/adopt anything.
+pub fn classify_daemon_recovery(resources: DaemonRecoveryResources) -> DaemonRecoveryState {
+    if !resources.container_exists && !resources.volume_exists && !resources.network_exists {
+        DaemonRecoveryState::Empty
+    } else if resources.container_exists
+        && resources.volume_exists
+        && resources.network_exists
+        && resources.container_managed
+        && resources.volume_managed
+        && resources.network_managed
+        && resources.container_isolated
+    {
+        DaemonRecoveryState::CompleteManagedIsolated
+    } else {
+        DaemonRecoveryState::Conflict
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonRecoveryStatus {
+    pub workspace: String,
+    pub recorded_daemon_id: Option<String>,
+    pub active_daemon_id: String,
+    pub state: DaemonRecoveryState,
+}
+
 /// `work update` outcome: managed config files classified against the running
 /// container, each path relative to `/home/dev`.
 #[derive(Debug, Clone, Default)]
@@ -63,9 +125,53 @@ impl Workspace {
         Ok(ws)
     }
 
+    /// Inspect whether an explicit daemon rebind can be made safely. Unlike
+    /// `open`, this is available precisely when ordinary daemon verification
+    /// refuses the workspace; it never writes configuration or changes engine
+    /// resources.
+    pub fn daemon_recovery_status(name: &str) -> Result<DaemonRecoveryStatus> {
+        naming::validate_name(name)?;
+        let cfg = config::load_workspace(name)?;
+        let engine = crate::engine::detect()?;
+        let active_daemon_id = engine.daemon_id()?;
+        if active_daemon_id.is_empty() {
+            bail!(
+                "active engine '{}' did not report a stable daemon identity; refusing daemon recovery",
+                engine.binary()
+            );
+        }
+        let state = inspect_daemon_recovery_resources(&*engine, name)?;
+        Ok(DaemonRecoveryStatus {
+            workspace: cfg.name,
+            recorded_daemon_id: cfg.daemon_id,
+            active_daemon_id,
+            state,
+        })
+    }
+
+    /// Persist a new daemon identity only after `daemon_recovery_status` has
+    /// verified that the active daemon contains the full managed workspace.
+    /// Caller confirmation is intentionally handled by the CLI command, so
+    /// library callers cannot accidentally bypass the inspection.
+    pub fn rebind_daemon(name: &str) -> Result<DaemonRecoveryStatus> {
+        let status = Self::daemon_recovery_status(name)?;
+        if status.state != DaemonRecoveryState::CompleteManagedIsolated {
+            bail!(
+                "refusing to rebind workspace '{}' on this daemon: resource state is {}. \
+                 Rebind requires the complete managed and isolated workspace; no resources were adopted or changed.",
+                status.workspace,
+                status.state.as_str(),
+            );
+        }
+        let mut cfg = config::load_workspace(name)?;
+        cfg.daemon_id = Some(status.active_daemon_id.clone());
+        config::save_workspace(&cfg)?;
+        Ok(status)
+    }
+
     /// Enforce that the active daemon matches the one this workspace was created
     /// on. A workspace created on daemon A that later resolves to daemon B (a
-    /// changed DOCKER_HOST / context / a second Colima instance) is refused —
+    /// changed engine endpoint/context / a second engine instance) is refused —
     /// names are not an isolation boundary across daemons. `daemon_id == None`
     /// (created before this field existed) is backfilled on first open, never a
     /// hard failure; a daemon that won't report an ID is treated as unverified.
@@ -105,60 +211,157 @@ impl Workspace {
         import_dotfiles: Option<std::path::PathBuf>,
         use_author_default: bool,
     ) -> Result<Self> {
+        Self::create_with_profile(
+            name,
+            image,
+            None,
+            None,
+            None,
+            None,
+            None,
+            git_name,
+            git_email,
+            import_shell,
+            import_herdr,
+            import_starship,
+            import_dotfiles,
+            use_author_default,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_with_profile(
+        name: &str,
+        image: Option<String>,
+        profile: Option<String>,
+        requested_shell: Option<String>,
+        requested_pids_limit: Option<u32>,
+        requested_browser_confirmation: Option<config::BrowserConfirmation>,
+        requested_browser_profile: Option<config::BrowserProfile>,
+        git_name: Option<String>,
+        git_email: Option<String>,
+        import_shell: Option<ImportSrc>,
+        import_herdr: Option<ImportSrc>,
+        import_starship: Option<ImportSrc>,
+        import_dotfiles: Option<std::path::PathBuf>,
+        use_author_default: bool,
+    ) -> Result<Self> {
         naming::validate_name(name)?;
         if config::workspace_exists(name) {
             bail!("workspace '{name}' already exists");
         }
+        let global = config::load_global()?;
+        // An explicit image is an intentional legacy/custom-image override of
+        // the saved default. An explicitly requested profile, by contrast,
+        // must remain reproducible and therefore cannot be paired with an
+        // arbitrary image.
+        let explicit_profile = profile.is_some();
+        let selected_profile = if image.is_some() {
+            profile
+        } else {
+            Some(
+                profile
+                    .or_else(|| Some(global.effective_default_profile().to_string()))
+                    .expect("default profile is always available"),
+            )
+        };
+        // A profile is a fixed Work-owned image/tool declaration. A custom
+        // image can still be used by legacy workflows, but never pretends to
+        // provide a profile's advertised tools.
+        if explicit_profile && image.is_some() {
+            bail!(
+                "--profile cannot be combined with --image; profiles use a fixed Work-owned image"
+            );
+        }
+        let resolved = match selected_profile.as_deref() {
+            Some(profile) => Some(config::resolve_profile(
+                Some(profile),
+                requested_shell.as_deref(),
+            )?),
+            None => {
+                if let Some(shell) = requested_shell.as_deref() {
+                    if !matches!(shell, "bash" | "zsh") {
+                        bail!("shell '{shell}' requires a profile that advertises it (use --profile developer for fish)");
+                    }
+                }
+                None
+            }
+        };
+        let image = resolved
+            .as_ref()
+            .map(|profile| profile.image.clone())
+            .or(image)
+            .unwrap_or_else(|| global.effective_default_image().to_string());
+        let shell = resolved
+            .as_ref()
+            .map(|profile| profile.shell.clone())
+            .or(requested_shell)
+            .unwrap_or_else(|| match config::detect_shell().as_str() {
+                // A custom/legacy image is only contracted to ship bash/zsh.
+                // Fish remains available when the developer profile is used.
+                "fish" => "zsh".to_string(),
+                detected => detected.to_string(),
+            });
+
+        let pids_limit = config::validate_pids_limit(
+            requested_pids_limit.unwrap_or(config::DEFAULT_PIDS_LIMIT),
+        )?;
+        let browser_confirmation = requested_browser_confirmation.unwrap_or_default();
+        let browser_profile = requested_browser_profile.unwrap_or_default();
+
         let engine = crate::engine::detect()?;
         if !engine.is_running()? {
             bail!(
-                "container engine '{}' is not running; start OrbStack/Docker first",
+                "container engine '{}' is not running; start it first (on macOS/WSL, also start the Podman machine if applicable)",
                 engine.binary()
             );
         }
-
-        let global = config::load_global()?;
-        let image = image.unwrap_or_else(|| global.effective_default_image().to_string());
         // Optional dotfiles tree import (explicit --import-dotfiles overrides the
         // global default; --default falls back to the embedded templates).
         let dotfiles_dir = import_dotfiles.or(global.import_dotfiles.clone());
-        let seed_author_default = use_author_default && dotfiles_dir.is_none();
+        let seed_bundled_defaults = dotfiles_dir.is_none()
+            && (use_author_default
+                || resolved
+                    .as_ref()
+                    .is_some_and(|profile| profile.name == config::DEVELOPER_PROFILE));
 
         // Ensure the image exists: build the default, or pull a custom one.
         ensure_image(&*engine, &image)?;
 
         // Familiarity: resolve + validate import sources BEFORE creating any
         // resources, so a bad path fails fast with no orphaned volume/net/container.
-        let shell = config::detect_shell();
         let rc = config::rc_name(&shell);
+        let shell_source =
+            resolve_import(import_shell.clone(), global.import_shell_config.as_deref())
+                .map(|source| source.to_path(rc));
+        let herdr_source =
+            resolve_import(import_herdr.clone(), global.import_herdr_config.as_deref())
+                .map(|source| source.to_path(".config/herdr/config.toml"));
+        let starship_source = resolve_import(
+            import_starship.clone(),
+            global.import_starship_config.as_deref(),
+        )
+        .map(|source| source.to_path(".config/starship.toml"));
         let seeds: Vec<(std::path::PathBuf, String, &str)> = [
-            resolve_import(import_shell, global.import_shell_config.as_deref())
-                .map(|s| (s.to_path(rc), format!("/home/dev/{rc}"), "shell")),
-            resolve_import(import_herdr, global.import_herdr_config.as_deref()).map(|s| {
+            shell_source
+                .clone()
+                .map(|source| (source, format!("/home/dev/{rc}"), "shell")),
+            herdr_source.clone().map(|source| {
                 (
-                    s.to_path(".config/herdr/config.toml"),
+                    source,
                     "/home/dev/.config/herdr/config.toml".into(),
                     "herdr",
                 )
             }),
-            resolve_import(import_starship, global.import_starship_config.as_deref()).map(|s| {
-                (
-                    s.to_path(".config/starship.toml"),
-                    "/home/dev/.config/starship.toml".into(),
-                    "starship",
-                )
-            }),
+            starship_source
+                .clone()
+                .map(|source| (source, "/home/dev/.config/starship.toml".into(), "starship")),
         ]
         .into_iter()
         .flatten()
         .collect();
         for (src, _dest, kind) in &seeds {
-            if !src.exists() {
-                bail!(
-                    "{kind} config not found at {}; pass an explicit path (e.g. --import-{kind}-config <path>)",
-                    src.display()
-                );
-            }
+            validate_import_file(src, kind)?;
         }
         if let Some(dir) = &dotfiles_dir {
             if !dir.exists() {
@@ -176,7 +379,8 @@ impl Workspace {
             if !engine.object_has_label(&vol, "volume", naming::LABEL_KEY)? {
                 bail!(
                     "volume '{vol}' exists but isn't work-managed — refusing to reuse it. Remove \
-                     it manually (e.g. `docker volume rm {vol}`) if you know it's safe."
+                     it manually (e.g. `{} volume rm {vol}`) if you know it's safe.",
+                    engine.binary()
                 );
             }
         } else {
@@ -186,7 +390,8 @@ impl Workspace {
             if !engine.object_has_label(&net, "network", naming::LABEL_KEY)? {
                 bail!(
                     "network '{net}' exists but isn't work-managed — refusing to reuse it. Remove \
-                     it manually (e.g. `docker network rm {net}`) if you know it's safe."
+                     it manually (e.g. `{} network rm {net}`) if you know it's safe.",
+                    engine.binary()
                 );
             }
         } else {
@@ -196,7 +401,7 @@ impl Workspace {
         if engine.container_exists(&ctr)? {
             engine.remove_container(&ctr)?;
         }
-        let opts = run_opts(name, &image, &shell);
+        let opts = run_opts(name, &image, &shell, pids_limit);
         engine.run(&opts)?;
         // Persist the config as soon as the container exists — recording the
         // daemon identity + resolved image id — so a later seeding failure leaves
@@ -205,10 +410,20 @@ impl Workspace {
         let image_digest = engine.image_id(&image).ok();
         let cfg = WorkspaceConfig {
             name: name.to_string(),
+            legacy_fields: std::collections::BTreeMap::new(),
             image,
             git_name: git_name.clone(),
             git_email: git_email.clone(),
             shell: Some(shell),
+            profile: resolved.as_ref().map(|profile| profile.name.clone()),
+            bundles: resolved.map(|profile| profile.bundles).unwrap_or_default(),
+            import_shell_config: shell_source,
+            import_herdr_config: herdr_source,
+            import_starship_config: starship_source,
+            import_dotfiles: dotfiles_dir.clone(),
+            pids_limit,
+            browser_confirmation,
+            browser_profile,
             daemon_id,
             image_digest,
             created_at: now_rfc3339(),
@@ -220,7 +435,7 @@ impl Workspace {
         let _ = crate::browser::install_shim(&*engine, &ctr);
 
         // Seed the dotfiles tree first (explicit dir, or the author's embedded
-        // templates via --default) so per-file imports below can still
+        // templates via --default or the developer profile) so per-file imports below can still
         // override individual files like .zshrc.
         if let Some(dir) = &dotfiles_dir {
             let staged = stage_allowed_dotfiles(dir)
@@ -234,13 +449,13 @@ impl Workspace {
                  they now live in that workspace's volume.",
                 dir.display()
             );
-        } else if seed_author_default {
+        } else if seed_bundled_defaults {
             let extracted = crate::templates::extract_to_tempdir()?;
             engine
                 .seed_dir(&ctr, extracted.path(), "/home/dev")
                 .context("seeding author-default dotfiles")?;
             println!(
-                "⚠  Copied the author's default dotfiles into '{name}'. Ensure they contain no secrets — they now live in that workspace's volume."
+                "✓  Seeded the bundled developer dotfiles into '{name}'. Per-file imports can override them."
             );
         }
 
@@ -267,6 +482,7 @@ impl Workspace {
                     &self.cfg.name,
                     &self.cfg.image,
                     self.cfg.shell.as_deref().unwrap_or("zsh"),
+                    self.cfg.pids_limit,
                 );
                 self.engine.run(&opts)?;
             }
@@ -279,20 +495,25 @@ impl Workspace {
         Ok(())
     }
 
-    /// Cheap isolation gate before attach: the container must be on its own
-    /// network and mount only its own volume. Catches drift a manual `docker
-    /// network connect` / cross-mounted volume introduces — `work doctor` would
-    /// flag it, but nothing previously checked the hot path, so every `work <ws>`
-    /// attached to a drifted container without complaint.
-    fn verify_before_attach(&self, ctr: &str) -> Result<()> {
-        let networks = self.engine.container_networks(ctr)?;
-        let mounts = self.engine.container_mounts(ctr)?;
-        let check = doctor::analyze_isolation(&self.cfg.name, &networks, &mounts);
-        if !check.ok {
+    /// Shared doctor gate before attach. Only verified isolation-boundary
+    /// violations refuse attach; configuration drift remains visible through
+    /// `work doctor` as a warning instead of making a safe workspace unusable.
+    fn verify_before_attach(&self, _ctr: &str) -> Result<()> {
+        let (checks, _) = doctor::workspace_checks(&*self.engine, &self.cfg)?;
+        let blockers: Vec<_> = checks
+            .iter()
+            .filter(|check| check.blocks_attach())
+            .collect();
+        if !blockers.is_empty() {
+            let details = blockers
+                .iter()
+                .map(|check| check.detail.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
             bail!(
                 "workspace '{}' failed its isolation check before attach (run `work doctor`): {}",
                 self.cfg.name,
-                check.detail
+                details
             );
         }
         Ok(())
@@ -343,7 +564,7 @@ impl Workspace {
             .exec_interactive(&ctr, &["herdr"], self.cfg.shell.as_deref().unwrap_or("zsh"))
     }
 
-    /// Gather hostname/OS/git-branch via one `docker exec` and print the banner.
+    /// Gather hostname/OS/git-branch via one engine `exec` and print the banner.
     /// Fail-soft: any error renders the dynamic fields as "—".
     fn print_banner(&self, ctr: &str) {
         let probe = "h=$(hostname 2>/dev/null); . /etc/os-release 2>/dev/null; s=${PRETTY_NAME:-}; g=$(git -C /home/dev rev-parse --abbrev-ref HEAD 2>/dev/null || true); printf '%s\\t%s\\t%s' \"$h\" \"$s\" \"$g\"";
@@ -414,6 +635,7 @@ impl Workspace {
             &self.cfg.name,
             &self.cfg.image,
             self.cfg.shell.as_deref().unwrap_or("zsh"),
+            self.cfg.pids_limit,
         );
         self.engine.run(&opts)?;
         // Re-record the resolved image id (a rebuild can change it) so `doctor`
@@ -439,11 +661,14 @@ impl Workspace {
             self.engine.remove_container(&ctr)?; // `rm -f` stops + removes
         }
         // The network may be held by a lingering forwarder (work-fwd-*); best-effort
-        // + warn rather than failing this data-safe removal.
-        if let Err(e) = self.engine.remove_network(&net) {
-            eprintln!(
-                "· could not remove network {net} ({e}); stop any `work fwd` for this workspace first"
-            );
+        // + warn rather than failing this data-safe removal. A missing network
+        // is already clean and should not produce a misleading warning.
+        if self.engine.network_exists(&net)? {
+            if let Err(e) = self.engine.remove_network(&net) {
+                eprintln!(
+                    "· could not remove network {net} ({e}); stop any `work fwd` for this workspace first"
+                );
+            }
         }
         if purge && self.engine.volume_exists(&vol)? {
             self.engine.remove_volume(&vol)?;
@@ -478,25 +703,39 @@ impl Workspace {
         dry_run: bool,
     ) -> Result<UpdateReport> {
         let global = config::load_global()?;
-        let dotfiles_dir = import_dotfiles.or(global.import_dotfiles.clone());
+        let dotfiles_dir = import_dotfiles
+            .or(self.cfg.import_dotfiles.clone())
+            .or(global.import_dotfiles.clone());
 
-        // Per-file imports: a flag overrides the global default (mirrors `create`).
+        // Precedence is explicit update flag -> source persisted at create ->
+        // global default. This makes bare updates repeatable without silently
+        // discarding a user's chosen shell config.
         let rc = config::rc_name(self.cfg.shell.as_deref().unwrap_or("zsh"));
+        let shell_source = resolve_import(import_shell, self.cfg.import_shell_config.as_deref())
+            .or_else(|| global.import_shell_config.clone().map(ImportSrc::Explicit))
+            .map(|source| source.to_path(rc));
+        let herdr_source = resolve_import(import_herdr, self.cfg.import_herdr_config.as_deref())
+            .or_else(|| global.import_herdr_config.clone().map(ImportSrc::Explicit))
+            .map(|source| source.to_path(".config/herdr/config.toml"));
+        let starship_source =
+            resolve_import(import_starship, self.cfg.import_starship_config.as_deref())
+                .or_else(|| {
+                    global
+                        .import_starship_config
+                        .clone()
+                        .map(ImportSrc::Explicit)
+                })
+                .map(|source| source.to_path(".config/starship.toml"));
         let seeds: Vec<(std::path::PathBuf, String)> = [
-            resolve_import(import_shell, global.import_shell_config.as_deref())
-                .map(|s| (s.to_path(rc), format!("/home/dev/{rc}"))),
-            resolve_import(import_herdr, global.import_herdr_config.as_deref()).map(|s| {
-                (
-                    s.to_path(".config/herdr/config.toml"),
-                    "/home/dev/.config/herdr/config.toml".into(),
-                )
-            }),
-            resolve_import(import_starship, global.import_starship_config.as_deref()).map(|s| {
-                (
-                    s.to_path(".config/starship.toml"),
-                    "/home/dev/.config/starship.toml".into(),
-                )
-            }),
+            shell_source
+                .clone()
+                .map(|source| (source, format!("/home/dev/{rc}"))),
+            herdr_source
+                .clone()
+                .map(|source| (source, "/home/dev/.config/herdr/config.toml".into())),
+            starship_source
+                .clone()
+                .map(|source| (source, "/home/dev/.config/starship.toml".into())),
         ]
         .into_iter()
         .flatten()
@@ -504,12 +743,7 @@ impl Workspace {
 
         // Validate sources BEFORE touching the container, so a bad path fails fast.
         for (src, _dest) in &seeds {
-            if !src.exists() {
-                bail!(
-                    "config to import not found at {}; pass an explicit --import-* path",
-                    src.display()
-                );
-            }
+            validate_import_file(src, "import")?;
         }
         if let Some(dir) = &dotfiles_dir {
             if !dir.exists() {
@@ -537,7 +771,7 @@ impl Workspace {
             }
         };
 
-        // `docker cp` + `chown` need the container up.
+        // Engine copy + `chown` need the container up.
         self.ensure_running()?;
         let ctr = naming::container(&self.cfg.name);
 
@@ -583,6 +817,44 @@ impl Workspace {
         self.apply_git_identity()?;
         Ok(report)
     }
+}
+
+/// Read the named workspace resources from the active daemon without changing
+/// them. Container topology is evaluated only when all resources exist; any
+/// inspection failure remains a hard error rather than being treated as safe.
+fn inspect_daemon_recovery_resources(
+    engine: &dyn Engine,
+    name: &str,
+) -> Result<DaemonRecoveryState> {
+    let ctr = naming::container(name);
+    let vol = naming::volume(name);
+    let net = naming::network(name);
+    let container_exists = engine.container_exists(&ctr)?;
+    let volume_exists = engine.volume_exists(&vol)?;
+    let network_exists = engine.network_exists(&net)?;
+
+    let mut resources = DaemonRecoveryResources {
+        container_exists,
+        volume_exists,
+        network_exists,
+        ..Default::default()
+    };
+    if container_exists {
+        resources.container_managed =
+            engine.object_has_label(&ctr, "container", naming::LABEL_KEY)?;
+    }
+    if volume_exists {
+        resources.volume_managed = engine.object_has_label(&vol, "volume", naming::LABEL_KEY)?;
+    }
+    if network_exists {
+        resources.network_managed = engine.object_has_label(&net, "network", naming::LABEL_KEY)?;
+    }
+    if container_exists && volume_exists && network_exists {
+        let networks = engine.container_networks(&ctr)?;
+        let mounts = engine.container_mounts(&ctr)?;
+        resources.container_isolated = doctor::analyze_isolation(name, &networks, &mounts).ok;
+    }
+    Ok(classify_daemon_recovery(resources))
 }
 
 // ---------- `work update` helpers ----------
@@ -639,7 +911,7 @@ fn file_sha256(path: &Path) -> Result<String> {
 }
 
 /// Compare a host file against its in-container counterpart by sha256. The
-/// container hash comes from `docker exec sha256sum <dest>` (coreutils, present
+/// container hash comes from engine `exec sha256sum <dest>` (coreutils, present
 /// on every base image). A missing file or any read error resolves to `Missing`
 /// — the apply step then creates it; a transient exec failure is unlikely
 /// because `update` ensures the container is running first.
@@ -656,13 +928,13 @@ fn file_status(engine: &dyn Engine, ctr: &str, host: &Path, dest: &str) -> Resul
     })
 }
 
-/// `docker run` options for a workspace container. Sets the `WORK`/`WORKSPACE`
+/// `run` options for a workspace container. Sets the `WORK`/`WORKSPACE`
 /// identity env, the xdg-open browser shim, and `NERD_FONTS=1`: the in-container
 /// multiplexer (herdr) makes agents like omp see `TERM_PROGRAM=herdr` instead of
 /// the host terminal, so their Nerd-Font auto-detection fails and they fall back
 /// to ASCII glyphs. `NERD_FONTS=1` forces Nerd Font glyphs — the host terminal
 /// still renders them. Override per-workspace by unsetting it in your shell rc.
-fn run_opts(name: &str, image: &str, shell: &str) -> RunOpts {
+fn run_opts(name: &str, image: &str, shell: &str, pids_limit: u32) -> RunOpts {
     RunOpts {
         name: naming::container(name),
         image: image.to_string(),
@@ -683,7 +955,10 @@ fn run_opts(name: &str, image: &str, shell: &str) -> RunOpts {
             // in-container path so the seeded rc actually runs.
             ("SHELL".into(), config::shell_path(shell).into()),
         ],
-        harden: HardenOpts::default(),
+        harden: HardenOpts {
+            pids_limit: Some(pids_limit),
+            ..HardenOpts::default()
+        },
     }
 }
 
@@ -695,6 +970,9 @@ fn ensure_image(engine: &dyn Engine, image: &str) -> Result<()> {
     if image == config::DEFAULT_IMAGE {
         println!("image '{image}' not found; building it now…");
         image::build_default(engine)
+    } else if image == config::DEVELOPER_IMAGE {
+        println!("developer image '{image}' not found; building it now…");
+        image::build_developer(engine)
     } else {
         println!("image '{image}' not found; pulling…");
         engine.pull_image(image)
@@ -723,7 +1001,7 @@ pub fn list_all() -> Result<Vec<WorkspaceStatus>> {
 
 /// `work fwd <ws> <port>`: bridge `127.0.0.1:<port>` (host) to `<ws>:<port>`.
 /// Runs the forwarder in the foreground on the workspace's dedicated network;
-/// Ctrl-C lets `docker run` stop + `--rm` the container.
+/// Ctrl-C lets the selected engine's `run` stop + `--rm` the container.
 pub fn forward(name: &str, port: u16) -> Result<()> {
     let ws = Workspace::open(name)?;
     ws.ensure_running()?;
@@ -734,7 +1012,7 @@ pub fn forward(name: &str, port: u16) -> Result<()> {
     }
     println!("Forwarding http://127.0.0.1:{port} -> {name}:{port}");
     println!("(Ctrl-C to stop the bridge)");
-    // Blocks until interrupted; cleanup is handled by `docker run --rm`.
+    // Blocks until interrupted; cleanup is handled by the selected engine's `run --rm`.
     engine.run_forwarder(
         &fwd_name,
         &naming::network(name),
@@ -765,9 +1043,12 @@ pub fn browse(name: &str) -> Result<()> {
     println!("Browsing for {name} — login URLs also bridge their callback port to the host.");
     println!("(Ctrl-C to stop)");
     let opener = crate::browser::host_opener();
-    let mut guard = crate::browser::BrowseGuard::new(
-        std::env::var("WORK_BROWSE_CONFIRM").ok().as_deref() == Some("no"),
-    );
+    let confirmation = if std::env::var("WORK_BROWSE_CONFIRM").ok().as_deref() == Some("no") {
+        config::BrowserConfirmation::Trusted
+    } else {
+        ws.cfg.browser_confirmation
+    };
+    let mut guard = crate::browser::BrowseGuard::new(confirmation);
     let mut bridged: HashSet<u16> = HashSet::new();
     let mut fwd_names: Vec<String> = Vec::new();
     let result = browse_loop(
@@ -779,9 +1060,10 @@ pub fn browse(name: &str) -> Result<()> {
         &mut bridged,
         &mut fwd_names,
         &mut guard,
+        ws.cfg.browser_profile,
     );
     // Cleanup forwarders on normal/error exit. Ctrl-C is handled by the process
-    // group receiving SIGINT -> each `docker run --rm` forwarder stops + removes.
+    // group receiving SIGINT -> each engine `run --rm` forwarder stops + removes.
     for fwd in &fwd_names {
         let _ = engine.remove_container(fwd);
     }
@@ -800,6 +1082,7 @@ fn browse_loop(
     bridged: &mut HashSet<u16>,
     fwd_names: &mut Vec<String>,
     guard: &mut crate::browser::BrowseGuard,
+    browser_profile: config::BrowserProfile,
 ) -> Result<()> {
     loop {
         let line = engine.exec_capture(ctr, &["cat", crate::browser::FIFO_PATH])?;
@@ -830,7 +1113,7 @@ fn browse_loop(
         if !guard.should_open(url) {
             continue;
         }
-        match crate::browser::open_url(opener, url) {
+        match crate::browser::open_url(opener, url, browser_profile) {
             Ok(()) => println!("↗ opened {url}"),
             Err(e) => eprintln!("· could not open {url} ({e})"),
         }
@@ -855,6 +1138,8 @@ const ALLOWED_DOTFILES: &[&str] = &[
     ".vimrc",
     ".config/nvim",
     ".config/starship.toml",
+    ".config/atuin",
+    ".config/fish",
     ".config/git",
     ".config/herdr",
 ];
@@ -904,8 +1189,23 @@ fn copy_tree_rejecting_symlinks(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy a host config file into the container volume (owned by dev), verbatim,
-/// printing the secret warning. Errors clearly if the source is absent.
+/// Validate a host config file before it can reach a workspace volume. Imports
+/// are regular files only: a symlink could otherwise smuggle an unrelated host
+/// secret into the workspace.
+fn validate_import_file(src: &Path, kind: &str) -> Result<()> {
+    let meta = std::fs::symlink_metadata(src)
+        .with_context(|| format!("reading {kind} config {}", src.display()))?;
+    if meta.file_type().is_symlink() {
+        bail!("refusing to import symlink {}", src.display());
+    }
+    if !meta.is_file() {
+        bail!("{kind} config at {} is not a regular file", src.display());
+    }
+    Ok(())
+}
+
+/// Copy a validated host config file into the container volume (owned by dev),
+/// verbatim, printing the secret warning.
 fn seed_into(
     engine: &dyn Engine,
     ctr: &str,
@@ -914,12 +1214,7 @@ fn seed_into(
     kind: &str,
     ws: &str,
 ) -> Result<()> {
-    if !src.exists() {
-        bail!(
-            "{kind} config not found at {}; pass an explicit path (e.g. --import-{kind}-config <path>)",
-            src.display()
-        );
-    }
+    validate_import_file(src, kind)?;
     engine
         .seed_file(ctr, src, dest)
         .with_context(|| format!("seeding {dest} from {}", src.display()))?;
@@ -938,10 +1233,20 @@ const BASHRC_DEFAULT: &str = r#"# Default work prompt. Override: `work new --imp
 PS1="\[\e[35m\]⬡\[\e[0m\] \[\e[36m\]${WORK}\[\e[0m\] \[\e[34m\]\w\[\e[0m\] $ "
 "#;
 
+const FISHRC_DEFAULT: &str = r#"# Default work prompt. Override: `work new --import-shell-config`.
+function fish_prompt
+    set_color magenta; echo -n '⬡ '
+    set_color cyan; echo -n "$WORK "
+    set_color blue; echo -n (prompt_pwd)
+    set_color normal; echo -n '> '
+end
+"#;
+
 /// Default rc body for the resolved shell.
 fn default_rc(rcname: &str) -> &'static str {
     match rcname {
         ".bashrc" => BASHRC_DEFAULT,
+        ".config/fish/config.fish" => FISHRC_DEFAULT,
         _ => ZSHRC_DEFAULT,
     }
 }
@@ -978,7 +1283,12 @@ mod tests {
 
     #[test]
     fn run_opts_sets_identity_env_and_names() {
-        let opts = run_opts("acme", "work-base:latest", "zsh");
+        let opts = run_opts(
+            "acme",
+            "work-base:latest",
+            "zsh",
+            config::DEFAULT_PIDS_LIMIT,
+        );
         assert_eq!(opts.name, "work-acme");
         assert_eq!(opts.network, "work-net-acme");
         assert_eq!(opts.volume, "work-acme-home");
