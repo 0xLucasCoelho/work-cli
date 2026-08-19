@@ -12,7 +12,14 @@ use work_core::engine::ContainerState;
 
 pub(crate) fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).split(area);
+    let chunks = Layout::vertical([
+        Constraint::Min(3),
+        Constraint::Length(1),
+        Constraint::Length(2),
+    ])
+    .split(area);
+    let body = Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(chunks[0]);
 
     let visible = app.visible_names();
     let selected = app.selected_name();
@@ -53,9 +60,22 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
     if let Some(i) = selected_idx {
         state.select(Some(i));
     }
-    frame.render_stateful_widget(list, chunks[0], &mut state);
+    frame.render_stateful_widget(list, body[0], &mut state);
 
-    let footer = if let Some(c) = app.confirm() {
+    let details = match app.selected_details() {
+        Some(details) => format!(
+            "Workspace: {}\n\nRuntime: {}\nHerdr session: {}\n\nEnter opens Herdr after leaving the dashboard.",
+            details.name, details.runtime, details.herdr
+        ),
+        None if app.is_empty() => "No workspaces yet.\n\nPress n to create one.".to_string(),
+        None => "No workspace matches the current filter.".to_string(),
+    };
+    frame.render_widget(
+        Paragraph::new(details).block(Block::bordered().title("Details")),
+        body[1],
+    );
+
+    let status = if let Some(c) = app.confirm() {
         c.blurb.clone()
     } else if app.mode() == Some(super::app::Mode::Filter) {
         format!("filter: {}  (Enter=apply · Esc=clear)", app.buf_str())
@@ -65,9 +85,11 @@ pub(crate) fn render(frame: &mut Frame, app: &mut App) {
             app.buf_str()
         )
     } else {
-        app.status_message().unwrap_or(
-            "Up/Dn move · Enter attach · s start · x stop · d rm · n new · / filter · r refresh · q/Ctrl-C quit"
-        ).to_string()
+        app.status_message().unwrap_or("Ready").to_string()
     };
-    frame.render_widget(Paragraph::new(footer), chunks[1]);
+    frame.render_widget(
+        Paragraph::new("↑/k ↓/j move · Enter Herdr · s start · x stop · d remove · n new · / filter · r refresh · q quit"),
+        chunks[1],
+    );
+    frame.render_widget(Paragraph::new(status), chunks[2]);
 }

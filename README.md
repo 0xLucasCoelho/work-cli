@@ -175,8 +175,12 @@ volume persist) or `work rm`.
 
 ## Familiarity (optional)
 
-`work` detects your host shell (`$SHELL`, clamped to `zsh`/`bash`) and uses it
-inside the container. You can optionally seed a verbatim copy of your own config:
+`work new` uses the built-in `developer` profile by default: your workspace
+starts with Zsh, the bundled developer/editor config, Fish as an option, and
+sudo available to the non-root `dev` user. In an interactive terminal it asks
+whether to import the detected host shell config; answering no keeps the
+workspace on the bundled, portable template. `$SHELL` imports recognize Zsh,
+Bash, and Fish. You can also make the choice explicit:
 
 ```bash
 work new acme --import-shell-config            # copies ~/.zshrc (or ~/.bashrc)
@@ -184,7 +188,9 @@ work new acme --import-shell-config ~/my.zshrc # copies that file -> /home/dev/.
 work new acme --import-herdr-config           # copies a herdr config.toml into the workspace
 work new acme --import-starship-config          # copies ~/.config/starship.toml -> /home/dev/.config/starship.toml
 work new acme --import-dotfiles ~/dotfiles        # recursively copies that dir -> /home/dev
-work new acme --default                        # seed the repo's bundled templates/ dotfiles
+work new acme --profile developer --shell zsh  # explicit equivalent of the default
+work new acme --shell fish                    # use Fish in the developer profile
+work new acme --default                        # force the bundled templates explicitly
 ```
 
 `work` prints a warning when it copies a config — **make sure it is secret-free**,
@@ -193,13 +199,13 @@ since it now lives in that workspace's volume. You can set a global default in
 reference host paths that don't exist in the container; the copy is verbatim and
 best-effort.
 
-`--import-dotfiles <dir>` copies an entire directory tree (e.g. your `.zshrc`,
-`.config/nvim`, `.config/atuin`) into `/home/dev` in one shot — useful for configs
-that aren't single files. `--default` does the same with the **bundled
-`templates/` dotfiles** (embedded in the binary at build) plus the configured
-`default_image`, so `work new <ws> --default` reproduces the author's full
-setup. Both also read a global default (`import_dotfiles = "…"`). The same secret-free
-warning applies; explicit `--import-*` flags override individual files from a dotfiles seed.
+`--import-dotfiles <dir>` copies an allowlisted directory tree (e.g. your
+`.zshrc`, `.config/nvim`, `.config/atuin`) into `/home/dev` in one shot — useful
+for configs that aren't single files. Symlinks and unlisted entries are refused.
+`--default` does the same with the **bundled `templates/` dotfiles** (embedded
+in the binary at build). The same secret-free warning applies; explicit
+`--import-*` flags override individual files from a dotfiles seed and the
+selected sources are remembered for later bare `work update` calls.
 
 ## Updating configs in place (`work update`)
 
@@ -342,7 +348,7 @@ work fwd acme 8080      # bridge http://127.0.0.1:8080 -> acme:8080
 
 | Command | Effect |
 |---|---|
-| `work new <ws>` | Create an isolated workspace (volume + network + container). Flags: `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-herdr-config [<path>]`, `--import-starship-config [<path>]`, `--import-dotfiles <dir>`, `--default`. |
+| `work new <ws>` | Create an isolated workspace (volume + network + container). Defaults to the `developer` profile/Zsh. Flags: `--profile`, `--shell`, `--image`, `--git-name`, `--git-email`, `--import-shell-config [<path>]`, `--import-herdr-config [<path>]`, `--import-starship-config [<path>]`, `--import-dotfiles <dir>`, `--default`. |
 | `work <ws>` | Attach to the in-container herdr server (launches it on first run). `Ctrl-b q` detaches. |
 | `work ls` | List workspaces with state and session liveness (`live`/`—`). |
 | `work start <ws>` / `work stop <ws>` | Lifecycle. `stop` ends the session (warns if one is live). |

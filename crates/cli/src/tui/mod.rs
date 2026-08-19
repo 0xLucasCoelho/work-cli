@@ -98,26 +98,33 @@ pub(crate) fn run(yes: bool) -> anyhow::Result<()> {
         }
     });
 
-    // Scope the TUI guard so its `Drop` restores the terminal (raw mode off, alt
-    // screen left, cursor shown) BEFORE we attach — `attach` spawns an interactive
-    // shell that needs a normal TTY. `Drop` fires on early `?` return too, so the
-    // terminal is never left in raw mode, even on error.
-    let pending = {
-        let mut tui = Tui::enter()?;
-        let mut app = App::new();
-        app.set_model(load_model()?);
-        run_loop(&mut tui, &mut app, yes, &rx)?;
-        app.pending().take()
-    };
+    let mut app = App::new();
+    app.set_model(load_model()?);
+    // Attach must run with a normal TTY. When Herdr exits or attach fails, enter
+    // the dashboard again and keep the workspace list plus an actionable result.
+    // This makes a failed attach recoverable instead of dropping the user into
+    // an opaque command-line error.
+    loop {
+        let pending = {
+            let mut tui = Tui::enter()?;
+            run_loop(&mut tui, &mut app, yes, &rx)?;
+            app.pending().take()
+        };
+        match pending {
+            Some(app::PendingAction::Attach(n)) => {
+                app.set_status(attach_result(commands::attach(&n), &n));
+            }
+            Some(app::PendingAction::Create(n)) => {
+                app.set_status(create_result(
+                    commands::new(&n, None, None, None, None, None, None, None, false),
+                    &n,
+                ));
+            }
+            None => break,
+        }
+    }
     // Stop the background refresh worker (it also exits when `rx` drops on return).
     quit.store(true, Ordering::Relaxed);
-    match pending {
-        Some(app::PendingAction::Attach(n)) => commands::attach(&n)?,
-        Some(app::PendingAction::Create(n)) => {
-            commands::new(&n, None, None, None, None, None, None, None, false)?
-        }
-        None => {}
-    }
     Ok(())
 }
 
@@ -167,7 +174,7 @@ fn run_loop(
                                     Workspace::open(&c.ws).and_then(|w| w.remove(false))
                                 }
                             };
-                            app.set_status(result_msg(r, &c.ws, verb_for(c.action)));
+                            app.set_status(result_msg(r, &c.ws, action_words(c.action)));
                         }
                     }
                     KeyCode::Char('n') | KeyCode::Esc | KeyCode::Enter => app.cancel_confirm(),
@@ -245,7 +252,7 @@ fn run_loop(
                             }
                             KeyCode::Char('s') => {
                                 let r = Workspace::open(&name).and_then(|w| w.start());
-                                app.set_status(result_msg(r, &name, "started"));
+                                app.set_status(result_msg(r, &name, ("start", "started")));
                             }
                             KeyCode::Char('x') => gate(
                                 app,
@@ -277,17 +284,38 @@ fn run_loop(
     }
 }
 
-fn verb_for(a: self::app::ConfirmAction) -> &'static str {
+fn action_words(a: self::app::ConfirmAction) -> (&'static str, &'static str) {
     match a {
-        self::app::ConfirmAction::Stop => "stopped",
-        self::app::ConfirmAction::Remove => "removed",
+        self::app::ConfirmAction::Stop => ("stop", "stopped"),
+        self::app::ConfirmAction::Remove => ("remove", "removed"),
     }
 }
 
-fn result_msg(r: anyhow::Result<()>, ws: &str, verb: &str) -> String {
+fn result_msg(r: anyhow::Result<()>, ws: &str, words: (&str, &str)) -> String {
+    let (infinitive, completed) = words;
     match r {
-        Ok(()) => format!("{ws}: {verb}"),
-        Err(e) => format!("{ws}: {verb} failed: {e}"),
+        Ok(()) => format!("{ws}: {completed}. Status will refresh shortly."),
+        Err(e) => format!(
+            "{ws}: couldn't {infinitive} — {e}. Run `work doctor`, resolve the reported issue, then retry."
+        ),
+    }
+}
+
+fn attach_result(r: anyhow::Result<()>, ws: &str) -> String {
+    match r {
+        Ok(()) => format!("{ws}: Herdr session closed; back at the dashboard."),
+        Err(e) => format!(
+            "{ws}: couldn't open Herdr — {e}. Check `work doctor`, start the workspace if needed, then press Enter to retry."
+        ),
+    }
+}
+
+fn create_result(r: anyhow::Result<()>, ws: &str) -> String {
+    match r {
+        Ok(()) => format!("{ws}: created. Select it and press Enter to open Herdr."),
+        Err(e) => format!(
+            "{ws}: couldn't create workspace — {e}. Correct the issue, then press n to retry."
+        ),
     }
 }
 
@@ -310,7 +338,7 @@ fn gate(
     match safety::decide(severity, live, true, yes) {
         Action::Proceed => {
             let r = Workspace::open(name).and_then(|w| f(&w));
-            app.set_status(result_msg(r, name, verb_for(action)));
+            app.set_status(result_msg(r, name, action_words(action)));
         }
         Action::Prompt => app.request_confirm(self::app::Confirm {
             ws: name.to_string(),
@@ -341,5 +369,32 @@ fn drain_refresh(
             }
             Err(_) => app.set_status("refresh failed — showing last state"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_errors_name_a_recovery_step() {
+        let message = result_msg(
+            Err(anyhow::anyhow!("engine unavailable")),
+            "docs",
+            ("start", "started"),
+        );
+
+        assert!(message.contains("couldn't start"));
+        assert!(message.contains("work doctor"));
+        assert!(message.contains("retry"));
+    }
+
+    #[test]
+    fn attach_errors_keep_a_clear_retry_path() {
+        let message = attach_result(Err(anyhow::anyhow!("workspace is stopped")), "docs");
+
+        assert!(message.contains("couldn't open Herdr"));
+        assert!(message.contains("start the workspace"));
+        assert!(message.contains("Enter to retry"));
     }
 }

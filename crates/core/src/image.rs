@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use tempfile::TempDir;
 
-use crate::config::DEFAULT_IMAGE;
+use crate::config::{DEFAULT_IMAGE, DEVELOPER_IMAGE};
 use crate::engine::{build_image_at, Engine};
 
 /// Embedded default Dockerfile/Containerfile (accepted by Docker-compatible
@@ -17,6 +17,17 @@ pub const DEFAULT_DOCKERFILE: &str = include_str!("../../docker/work-base.Docker
 pub fn build_default(engine: &dyn Engine) -> Result<()> {
     build_image(engine, DEFAULT_IMAGE, DEFAULT_DOCKERFILE)
 }
+
+/// Build the developer bundle from the checked-in personal image definition.
+/// This keeps the profile useful on first attach: zsh, Fish, Neovim, sudo and
+/// the shell tools used by the bundled templates are all present together.
+pub fn build_developer(engine: &dyn Engine) -> Result<()> {
+    build_image(engine, DEVELOPER_IMAGE, PERSONAL_DOCKERFILE)
+}
+
+/// The developer image is deliberately a repository-owned, reviewable build
+/// definition rather than a host-derived Dockerfile.
+pub const PERSONAL_DOCKERFILE: &str = include_str!("../../../Dockerfile.personal");
 
 /// Build `tag` from `dockerfile_content` using a throwaway build context.
 pub fn build_image(engine: &dyn Engine, tag: &str, dockerfile_content: &str) -> Result<()> {
@@ -44,6 +55,8 @@ pub fn build(engine: &dyn Engine, tag: Option<&str>, dockerfile: Option<&Path>) 
         None => {
             if tag == DEFAULT_IMAGE {
                 build_default(engine)?;
+            } else if tag == DEVELOPER_IMAGE {
+                build_developer(engine)?;
             } else {
                 anyhow::bail!("building a custom tag '{tag}' requires --dockerfile <path>");
             }

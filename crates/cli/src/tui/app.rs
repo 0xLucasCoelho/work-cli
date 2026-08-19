@@ -2,7 +2,6 @@
 //! concurrent work rm/new (changes length AND order) can't shift the cursor onto
 //! the wrong workspace. No IO, no rendering.
 
-#[cfg(test)]
 use work_core::engine::ContainerState;
 use work_core::workspace::WorkspaceStatus;
 
@@ -93,6 +92,26 @@ impl App {
         self.selected
             .as_deref()
             .and_then(|n| self.model.iter().find(|w| w.name == n))
+    }
+
+    /// Human-readable, typed status lines for the selected workspace. Keeping
+    /// this projection in the pure state layer lets the renderer stay dumb and
+    /// gives us a small, engine-free surface to test.
+    pub(crate) fn selected_details(&self) -> Option<WorkspaceDetails<'_>> {
+        let status = self.selected_status()?;
+        Some(WorkspaceDetails {
+            name: &status.name,
+            runtime: match status.state {
+                ContainerState::Running => "Running",
+                ContainerState::Stopped => "Stopped",
+                ContainerState::Missing => "Missing",
+            },
+            herdr: if status.session_live {
+                "Live"
+            } else {
+                "Not connected"
+            },
+        })
     }
 
     pub(crate) fn model(&self) -> &[WorkspaceStatus] {
@@ -218,6 +237,12 @@ impl App {
         self.model.is_empty()
     }
 }
+
+pub(crate) struct WorkspaceDetails<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) runtime: &'static str,
+    pub(crate) herdr: &'static str,
+}
 #[cfg(test)]
 fn ws(name: &str) -> WorkspaceStatus {
     WorkspaceStatus {
@@ -330,5 +355,20 @@ mod tests {
         app.set_filter(Some("blog".into())); // only blog visible
         app.move_up(); // infra is filtered out -> snap to the only visible item
         assert_eq!(app.selected_name(), Some("blog"));
+    }
+
+    #[test]
+    fn selected_details_are_derived_from_typed_workspace_status() {
+        let mut app = App::new();
+        app.set_model(vec![WorkspaceStatus {
+            name: "docs".into(),
+            state: ContainerState::Stopped,
+            session_live: false,
+        }]);
+
+        let details = app.selected_details().expect("selected workspace");
+        assert_eq!(details.name, "docs");
+        assert_eq!(details.runtime, "Stopped");
+        assert_eq!(details.herdr, "Not connected");
     }
 }

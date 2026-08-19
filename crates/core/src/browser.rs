@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use url::{Host, Url};
 
+use crate::config::{BrowserConfirmation, BrowserProfile};
 use crate::engine::Engine;
 
 /// Where the FIFO lives (in the workspace volume, so it persists across
@@ -140,16 +141,17 @@ const BROWSE_RATE_LIMIT: Duration = Duration::from_secs(2);
 pub struct BrowseGuard {
     confirmed: HashSet<String>,
     last_open: Option<Instant>,
-    yes_all: bool,
+    trusted: bool,
 }
 
 impl BrowseGuard {
-    /// `yes_all` skips the per-host prompt (set via `WORK_BROWSE_CONFIRM=no`).
-    pub fn new(yes_all: bool) -> Self {
+    /// Trusted mode skips the per-host prompt. It is deliberately an explicit
+    /// workspace preference; `prompt` remains the default.
+    pub fn new(confirmation: BrowserConfirmation) -> Self {
         Self {
             confirmed: HashSet::new(),
             last_open: None,
-            yes_all,
+            trusted: confirmation == BrowserConfirmation::Trusted,
         }
     }
 
@@ -166,7 +168,7 @@ impl BrowseGuard {
             .ok()
             .and_then(|u| u.host_str().map(str::to_string))
             .unwrap_or_default();
-        if !self.yes_all && !self.confirmed.contains(&host) {
+        if !self.trusted && !self.confirmed.contains(&host) {
             if host.is_empty() {
                 eprintln!("· no host in {url} — not opening");
                 return false;
@@ -189,12 +191,14 @@ impl BrowseGuard {
     }
 }
 
-/// Open `url` in the host browser. Unless `WORK_BROWSE_PROFILE=default` (the
-/// opt-out), try a throwaway Chrome guest profile on macOS so a forced
+/// Open `url` in the host browser. Unless the workspace selected `default`
+/// (or the process-local `WORK_BROWSE_PROFILE=default` override is set), try a
+/// throwaway Chrome guest profile on macOS so a forced
 /// navigation can't ride an authenticated profile; fall back to the default
 /// opener if Chrome isn't present. Returns an error string on failure.
-pub fn open_url(opener: &str, url: &str) -> Result<(), String> {
+pub fn open_url(opener: &str, url: &str, profile: BrowserProfile) -> Result<(), String> {
     if std::env::consts::OS == "macos"
+        && profile == BrowserProfile::Guest
         && std::env::var("WORK_BROWSE_PROFILE").ok().as_deref() != Some("default")
     {
         let status = Command::new("open")

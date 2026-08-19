@@ -17,7 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # --- System packages (neovim 0.9.5 + fzf/ripgrep/direnv from apt) ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git openssh-client ca-certificates zsh bash sudo curl jq build-essential \
+      git openssh-client ca-certificates zsh bash fish sudo curl jq build-essential \
       fzf ripgrep direnv less file unzip neovim \
       ncurses-term locales \
  && locale-gen en_US.UTF-8 \

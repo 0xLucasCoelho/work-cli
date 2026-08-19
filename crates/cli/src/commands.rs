@@ -1,5 +1,6 @@
-use std::io::IsTerminal;
+use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -24,15 +25,92 @@ pub fn new(
     import_dotfiles: Option<std::path::PathBuf>,
     use_author_default: bool,
 ) -> Result<()> {
+    new_with_profile(
+        name,
+        image,
+        None,
+        None,
+        None,
+        None,
+        None,
+        git_name,
+        git_email,
+        import_shell_config,
+        import_herdr_config,
+        import_starship_config,
+        import_dotfiles,
+        use_author_default,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn new_with_profile(
+    name: &str,
+    image: Option<String>,
+    profile: Option<String>,
+    shell: Option<String>,
+    pids_limit: Option<u32>,
+    browser_confirmation: Option<String>,
+    browser_profile: Option<String>,
+    git_name: Option<String>,
+    git_email: Option<String>,
+    import_shell_config: Option<String>,
+    import_herdr_config: Option<String>,
+    import_starship_config: Option<String>,
+    import_dotfiles: Option<std::path::PathBuf>,
+    use_author_default: bool,
+) -> Result<()> {
+    // Keep the happy path short: the developer profile and bundled templates
+    // are automatic, while copying host state remains an explicit, one-line
+    // choice. Non-interactive invocations stay deterministic and never prompt.
+    let import_shell_config = if profile.is_none()
+        && shell.is_none()
+        && image.is_none()
+        && import_shell_config.is_none()
+        && import_herdr_config.is_none()
+        && import_starship_config.is_none()
+        && import_dotfiles.is_none()
+        && !use_author_default
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal()
+    {
+        print!("Import your detected host shell config into this workspace? [y/N] ");
+        io::stdout()
+            .flush()
+            .context("flushing shell-config prompt")?;
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .context("reading shell-config choice")?;
+        if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            Some(String::new())
+        } else {
+            None
+        }
+    } else {
+        import_shell_config
+    };
+
     // Flag value: None=off, ""=auto (detected rc), <path>=explicit.
     let to_src = |v: Option<String>| match v {
         None => None,
         Some(s) if s.is_empty() => Some(ImportSrc::Auto),
         Some(s) => Some(ImportSrc::Explicit(s.into())),
     };
-    let ws = Workspace::create(
+    let ws = Workspace::create_with_profile(
         name,
         image,
+        profile,
+        shell,
+        pids_limit,
+        browser_confirmation
+            .as_deref()
+            .map(config::BrowserConfirmation::from_str)
+            .transpose()?,
+        browser_profile
+            .as_deref()
+            .map(config::BrowserProfile::from_str)
+            .transpose()?,
         git_name,
         git_email,
         to_src(import_shell_config),
@@ -49,9 +127,74 @@ pub fn new(
     Ok(())
 }
 
+/// Inspect or change the default declarative profile used for future
+/// workspaces. This never installs host packages or edits existing workspaces.
+pub fn profile_list() -> Result<()> {
+    let global = config::load_global()?;
+    let default = global.effective_default_profile();
+    println!("default profile: {default}");
+    println!("minimal    shells: bash, zsh; tools: git and core utilities");
+    println!("developer  shells: bash, zsh, fish; tools: fish, neovim, git and core utilities");
+    Ok(())
+}
+
+pub fn profile_set_default(name: &str) -> Result<()> {
+    // Resolve now so a typo does not get persisted and fail on the next `new`.
+    let _ = config::resolve_profile(Some(name), None)?;
+    let mut global = config::load_global()?;
+    global.default_profile = Some(name.to_string());
+    config::save_global(&global)?;
+    println!("✓ default profile set to '{name}' for future workspaces");
+    Ok(())
+}
+
 pub fn shell(name: &str) -> Result<()> {
     let ws = Workspace::open(name)?;
     ws.shell()
+}
+
+/// `work daemon status <ws>` remains usable when ordinary workspace open
+/// refuses a daemon mismatch. It is inspection-only.
+pub fn daemon_status(name: &str) -> Result<()> {
+    let status = Workspace::daemon_recovery_status(name)?;
+    let recorded = status.recorded_daemon_id.as_deref().unwrap_or("unrecorded");
+    println!("workspace: {}", status.workspace);
+    println!("recorded daemon: {recorded}");
+    println!("active daemon: {}", status.active_daemon_id);
+    println!("active resources: {}", status.state.as_str());
+    match status.state {
+        work_core::workspace::DaemonRecoveryState::CompleteManagedIsolated => {
+            println!(
+                "rebind is available: run `work daemon rebind {} --confirm`",
+                status.workspace
+            );
+        }
+        work_core::workspace::DaemonRecoveryState::Empty => {
+            println!("rebind is unavailable: this daemon has no workspace resources; switch back to the recorded daemon.");
+        }
+        work_core::workspace::DaemonRecoveryState::Conflict => {
+            println!("rebind is unavailable: resources are partial, unmanaged, or not isolated; no resources were adopted.");
+        }
+    }
+    Ok(())
+}
+
+/// `work daemon rebind <ws> --confirm`: update only the stored daemon ID after
+/// the core has re-inspected the active resources. `--confirm` is intentionally
+/// separate from global `--yes`: changing this security binding must always be
+/// an explicit, visible invocation.
+pub fn daemon_rebind(name: &str, confirmed: bool) -> Result<()> {
+    if !confirmed {
+        anyhow::bail!(
+            "refusing to change workspace daemon binding without --confirm; run `work daemon status {name}` first"
+        );
+    }
+    let status = Workspace::rebind_daemon(name)?;
+    println!(
+        "✓ rebound '{}' to the active daemon after verifying its complete managed isolated resources",
+        status.workspace
+    );
+    Ok(())
 }
 
 #[allow(dead_code)] // wired into the dashboard in Task 2.6; near-twin of `shell`
@@ -289,7 +432,7 @@ pub fn config_edit(name: &str, yes: bool) -> Result<()> {
         .with_context(|| format!("edited config is invalid; fix {} and retry", path.display()))?;
 
     let ws = Workspace::open(name)?;
-    if ws.cfg.image != before.image {
+    if ws.cfg.image != before.image || ws.cfg.pids_limit != before.pids_limit {
         confirm(
             Severity::WorkLoss,
             ws.has_live_session().unwrap_or(true),
@@ -297,15 +440,58 @@ pub fn config_edit(name: &str, yes: bool) -> Result<()> {
             name,
             "recreating the container will end its running session",
         )?;
-        println!(
-            "image changed ({} -> {}); recreating container…",
-            before.image, ws.cfg.image
-        );
+        println!("runtime configuration changed; recreating container…");
         ws.recreate()?;
     } else {
         ws.apply_git_identity()?;
     }
     println!("✓ updated '{name}'");
+    Ok(())
+}
+
+/// Apply validated, non-secret runtime/browser preferences without exposing the
+/// config file as the primary UX. PID changes recreate only after the existing
+/// live-session policy permits it; browser preferences apply to the next
+/// `work browse` process without restarting the workspace.
+pub fn config_set_preferences(
+    name: &str,
+    pids_limit: Option<u32>,
+    browser_confirmation: Option<String>,
+    browser_profile: Option<String>,
+    yes: bool,
+) -> Result<()> {
+    if pids_limit.is_none() && browser_confirmation.is_none() && browser_profile.is_none() {
+        anyhow::bail!("provide at least one preference to change");
+    }
+    let before = config::load_workspace(name)?;
+    let mut cfg = before.clone();
+    if let Some(limit) = pids_limit {
+        cfg.pids_limit = config::validate_pids_limit(limit)?;
+    }
+    if let Some(value) = browser_confirmation {
+        cfg.browser_confirmation = config::BrowserConfirmation::from_str(&value)?;
+    }
+    if let Some(value) = browser_profile {
+        cfg.browser_profile = config::BrowserProfile::from_str(&value)?;
+    }
+    let runtime_changed = cfg.pids_limit != before.pids_limit;
+    if runtime_changed {
+        let ws = Workspace::open(name)?;
+        confirm(
+            Severity::WorkLoss,
+            ws.has_live_session().unwrap_or(true),
+            yes,
+            name,
+            "recreating to apply the PID limit ends its running session",
+        )?;
+        config::save_workspace(&cfg)?;
+        // Re-open only after persisting so the recreated container receives the
+        // newly validated runtime setting rather than the stale in-memory cfg.
+        Workspace::open(name)?.recreate()?;
+    } else {
+        config::save_workspace(&cfg)?;
+    }
+    println!("✓ updated preferences for '{name}'");
     Ok(())
 }
 
@@ -465,6 +651,21 @@ pub struct NewArgs {
     /// Container image to use (defaults to the configured default_image).
     #[arg(long)]
     pub image: Option<String>,
+    /// Declarative Work-owned profile: minimal or developer. Profiles never import host tools or credentials.
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Shell supplied by the selected profile. Fish is available only with --profile developer.
+    #[arg(long)]
+    pub shell: Option<String>,
+    /// Per-workspace process/thread cap (64 through 131072). Changing it later recreates the container.
+    #[arg(long = "pids-limit")]
+    pub pids_limit: Option<u32>,
+    /// Browser host confirmation: prompt (default) or trusted (explicit opt-in).
+    #[arg(long = "browser-confirmation")]
+    pub browser_confirmation: Option<String>,
+    /// Browser profile on macOS: guest (default) or default.
+    #[arg(long = "browser-profile")]
+    pub browser_profile: Option<String>,
     /// Optional git user.name to set inside the workspace.
     #[arg(long = "git-name")]
     pub git_name: Option<String>,

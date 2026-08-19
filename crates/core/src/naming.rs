@@ -7,7 +7,7 @@
 /// added here (and `validate_name` will then reject it as a workspace name).
 pub const RESERVED: &[&str] = &[
     "new", "all", "browse", "ls", "start", "stop", "stop-all", "resume", "fwd", "config", "image",
-    "doctor", "help", "harden", "version", "rm", "tab", "tabs", "update",
+    "doctor", "help", "harden", "version", "rm", "tab", "tabs", "update", "profile",
 ];
 
 /// OCI label key marking an object (volume/network/container) as created and
@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn reserved_includes_every_cli_verb() {
         for verb in [
-            "image", "doctor", "help", "version", "rm", "tab", "tabs", "update",
+            "image", "doctor", "help", "version", "rm", "tab", "tabs", "update", "profile",
         ] {
             assert!(RESERVED.contains(&verb), "missing reserved verb: {verb}");
             assert!(
